@@ -1,3 +1,3 @@
 module weather-risk-api
 
-go 1.25.6
+go 1.22
