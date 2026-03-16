@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Weather Risk API</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0f1117;
+      --surface:   #181c27;
+      --border:    #272d3d;
+      --accent:    #4f8ef7;
+      --accent2:   #7c5bf5;
+      --green:     #3ecf8e;
+      --yellow:    #f5c842;
+      --red:       #f56b6b;
+      --text:      #e2e8f0;
+      --muted:     #6b7a99;
+      --code-bg:   #111520;
+      --radius:    10px;
+      --mono:      "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Layout ── */
+    .layout { display: flex; min-height: 100vh; }
+
+    nav {
+      width: 240px;
+      flex-shrink: 0;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      padding: 32px 0;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+    }
+
+    nav .logo {
+      padding: 0 24px 28px;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 16px;
+    }
+
+    nav .logo span { color: var(--accent); }
+
+    nav ul { list-style: none; }
+    nav ul li a {
+      display: block;
+      padding: 7px 24px;
+      color: var(--muted);
+      font-size: 13.5px;
+      transition: color .15s;
+    }
+    nav ul li a:hover, nav ul li a.active { color: var(--text); text-decoration: none; }
+    nav ul li a.active { border-left: 2px solid var(--accent); padding-left: 22px; color: var(--accent); }
+
+    nav .section-label {
+      padding: 18px 24px 6px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+    }
+
+    main {
+      flex: 1;
+      max-width: 860px;
+      padding: 56px 48px;
+    }
+
+    /* ── Typography ── */
+    h1 { font-size: 32px; font-weight: 700; margin-bottom: 12px; }
+    h2 { font-size: 22px; font-weight: 600; margin: 48px 0 14px; padding-top: 8px; }
+    h3 { font-size: 16px; font-weight: 600; margin: 28px 0 10px; color: var(--text); }
+    p  { color: #a8b4cc; margin-bottom: 14px; }
+
+    .subtitle { font-size: 17px; color: var(--muted); margin-bottom: 36px; }
+
+    /* ── Badges ── */
+    .badge {
+      display: inline-block;
+      padding: 2px 9px;
+      border-radius: 4px;
+      font-size: 11.5px;
+      font-weight: 600;
+      font-family: var(--mono);
+      vertical-align: middle;
+    }
+    .badge-get    { background: #1a3a5c; color: #5ab4f7; }
+    .badge-low    { background: #1a3a2a; color: var(--green); }
+    .badge-mod    { background: #3a2e10; color: var(--yellow); }
+    .badge-high   { background: #3a1a1a; color: var(--red); }
+    .badge-opt    { background: #1e2035; color: var(--muted); }
+    .badge-req    { background: #2a1f40; color: var(--accent2); }
+
+    /* ── Code blocks ── */
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      overflow-x: auto;
+      margin: 16px 0 24px;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+    code {
+      font-family: var(--mono);
+      font-size: 13px;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      padding: 1px 6px;
+      border-radius: 4px;
+      color: #c9d6f0;
+    }
+    pre code { background: none; border: none; padding: 0; }
+
+    .kw  { color: #7c9ef5; }
+    .str { color: #98d4a3; }
+    .num { color: #f5c842; }
+    .cmt { color: #4a5568; font-style: italic; }
+    .key { color: #c9d6f0; }
+    .val { color: #f5c842; }
+    .url { color: var(--accent); }
+
+    /* ── Endpoint block ── */
+    .endpoint {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 22px;
+      margin: 16px 0;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-family: var(--mono);
+      font-size: 14px;
+    }
+
+    /* ── Tables ── */
+    table { width: 100%; border-collapse: collapse; margin: 16px 0 28px; }
+    th {
+      text-align: left;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 12px;
+    }
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #1c2030;
+      font-size: 13.5px;
+      color: #a8b4cc;
+      vertical-align: top;
+    }
+    td:first-child { font-family: var(--mono); color: var(--text); }
+    tr:last-child td { border-bottom: none; }
+
+    /* ── Response tree ── */
+    .tree {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 2;
+    }
+    .tree .field  { color: #7c9ef5; }
+    .tree .type   { color: var(--muted); font-size: 12px; margin-left: 6px; }
+    .tree .desc   { color: #4a5568; font-size: 12px; margin-left: 10px; }
+    .tree .indent { padding-left: 22px; }
+
+    /* ── Risk level cards ── */
+    .risk-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin: 16px 0 28px;
+    }
+    .risk-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+    }
+    .risk-card h4 { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+    .risk-card p  { font-size: 12.5px; margin: 0; color: var(--muted); line-height: 1.5; }
+    .risk-card.wind     h4 { color: #5ab4f7; }
+    .risk-card.precip   h4 { color: #7c9ef5; }
+    .risk-card.vis      h4 { color: #c9d6f0; }
+    .risk-card.thunder  h4 { color: var(--yellow); }
+    .risk-card.freezing h4 { color: #64c8e8; }
+    .risk-card.thermal  h4 { color: #f5a842; }
+
+    /* ── Alert box ── */
+    .alert {
+      background: #141a2e;
+      border: 1px solid #2a3555;
+      border-left: 3px solid var(--accent);
+      border-radius: var(--radius);
+      padding: 14px 18px;
+      font-size: 13.5px;
+      color: #a8b4cc;
+      margin: 20px 0;
+    }
+
+    /* ── Divider ── */
+    hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+  </style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- Sidebar -->
+  <nav>
+    <div class="logo">⛰ <span>weather</span>-risk-api</div>
+    <ul>
+      <li><div class="section-label">Getting Started</div></li>
+      <li><a href="#overview" class="active">Overview</a></li>
+      <li><a href="#quickstart">Quick Start</a></li>
+
+      <li><div class="section-label">API Reference</div></li>
+      <li><a href="#endpoint">Endpoint</a></li>
+      <li><a href="#response">Response Schema</a></li>
+      <li><a href="#risk-categories">Risk Categories</a></li>
+      <li><a href="#thresholds">Thresholds</a></li>
+
+      <li><div class="section-label">Internals</div></li>
+      <li><a href="#models">Weather Models</a></li>
+      <li><a href="#confidence">Confidence Scoring</a></li>
+      <li><a href="#cache">Spatial Cache</a></li>
+    </ul>
+  </nav>
+
+  <!-- Content -->
+  <main>
+
+    <!-- Overview -->
+    <section id="overview">
+      <h1>Weather Risk API</h1>
+      <p class="subtitle">Mountain-aware risk forecasting powered by Open-Meteo</p>
+      <p>
+        A single JSON endpoint that fetches hourly data from up to four weather models
+        (ECMWF, GFS, GEM, ICON) and returns a structured risk forecast aimed at outdoor
+        and alpine users. Every response includes a 24-hour guide brief, a 10-day daily
+        breakdown, and multi-model confidence scoring.
+      </p>
+      <div class="alert">
+        No API key required. Open-Meteo is free for non-commercial use. Rate-limit
+        calls on your end — the server caches responses for 10 minutes within a 1 km radius.
+      </div>
+    </section>
+
+    <hr />
+
+    <!-- Quick Start -->
+    <section id="quickstart">
+      <h2>Quick Start</h2>
+
+      <h3>Run the server</h3>
+      <pre><code><span class="cmt"># requires Go 1.21+</span>
+git clone https://github.com/you/weather-risk-api
+cd weather-risk-api
+go run .
+<span class="cmt"># → listening on :8080</span></code></pre>
+
+      <h3>Make a request</h3>
+      <pre><code>curl "<span class="url">http://localhost:8080/forecast?lat=41.33&lon=19.82</span>"</code></pre>
+
+      <h3>Example response (abbreviated)</h3>
+      <pre><code>{
+  <span class="key">"timezone"</span>: <span class="str">"Europe/Tirane"</span>,
+  <span class="key">"sources"</span>: [<span class="str">"ecmwf"</span>, <span class="str">"gfs"</span>, <span class="str">"gem"</span>, <span class="str">"icon"</span>],
+  <span class="key">"brief"</span>: {
+    <span class="key">"dominant_risk"</span>: <span class="str">"WIND"</span>,
+    <span class="key">"top_signals"</span>: {
+      <span class="key">"wind"</span>: <span class="str">"STRONG"</span>,
+      <span class="key">"temp_feel"</span>: <span class="str">"COOL"</span>,
+      <span class="key">"rain"</span>: <span class="str">"DRY"</span>,
+      <span class="key">"exposure"</span>: <span class="kw">true</span>,
+      <span class="key">"confidence"</span>: <span class="str">"HIGH"</span>
+    },
+    <span class="key">"key_risks"</span>: [
+      { <span class="key">"type"</span>: <span class="str">"RIDGE_WIND"</span>, <span class="key">"level"</span>: <span class="str">"HIGH"</span>,     <span class="key">"value"</span>: <span class="str">"67 km/h"</span> },
+      { <span class="key">"type"</span>: <span class="str">"GUSTS"</span>,      <span class="key">"level"</span>: <span class="str">"HIGH"</span>,     <span class="key">"value"</span>: <span class="str">"74/67 km/h"</span> },
+      { <span class="key">"type"</span>: <span class="str">"VISIBILITY"</span>, <span class="key">"level"</span>: <span class="str">"LOW"</span>,      <span class="key">"value"</span>: <span class="str">">=10 km"</span> },
+      { <span class="key">"type"</span>: <span class="str">"PRECIP"</span>,     <span class="key">"level"</span>: <span class="str">"LOW"</span>,      <span class="key">"value"</span>: <span class="str">"0.0 mm"</span> }
+    ]
+  },
+  <span class="key">"snapshot"</span>: { <span class="cmt">/* 24-hour window summary */</span> },
+  <span class="key">"days"</span>: [ <span class="cmt">/* 10-day array */</span> ]
+}</code></pre>
+    </section>
+
+    <hr />
+
+    <!-- Endpoint -->
+    <section id="endpoint">
+      <h2>Endpoint</h2>
+
+      <div class="endpoint">
+        <span class="badge badge-get">GET</span>
+        <span>/forecast</span>
+      </div>
+
+      <table>
+        <thead>
+          <tr><th>Parameter</th><th>Type</th><th></th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>lat</td>
+            <td>float</td>
+            <td><span class="badge badge-req">required</span></td>
+            <td>Latitude in decimal degrees (e.g. <code>41.33</code>)</td>
+          </tr>
+          <tr>
+            <td>lon</td>
+            <td>float</td>
+            <td><span class="badge badge-req">required</span></td>
+            <td>Longitude in decimal degrees (e.g. <code>19.82</code>)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Response headers</h3>
+      <table>
+        <thead><tr><th>Header</th><th>Values</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td>X-Cache</td><td><code>HIT</code> / <code>MISS</code></td><td>Whether the response was served from the spatial cache</td></tr>
+          <tr><td>Content-Type</td><td><code>application/json</code></td><td></td></tr>
+        </tbody>
+      </table>
+
+      <div class="endpoint" style="margin-top:24px">
+        <span class="badge badge-get">GET</span>
+        <span>/health</span>
+      </div>
+      <p>Returns <code>{"status":"ok"}</code>. Suitable for load balancer health checks.</p>
+    </section>
+
+    <hr />
+
+    <!-- Response schema -->
+    <section id="response">
+      <h2>Response Schema</h2>
+
+      <h3>Top level</h3>
+      <div class="tree">
+        <div><span class="field">timezone</span><span class="type">string</span><span class="desc">// IANA timezone from Open-Meteo</span></div>
+        <div><span class="field">sources</span><span class="type">string[]</span><span class="desc">// models used: "ecmwf" always present + any of "gfs","gem","icon"</span></div>
+        <div><span class="field">brief</span><span class="type">GuideBrief</span><span class="desc">// 24-hour guide summary</span></div>
+        <div><span class="field">snapshot</span><span class="type">RiskSnapshot</span><span class="desc">// 24-hour numeric snapshot</span></div>
+        <div><span class="field">days</span><span class="type">DailyRiskSummary[]</span><span class="desc">// up to 10 days</span></div>
+      </div>
+
+      <h3>GuideBrief</h3>
+      <div class="tree">
+        <div><span class="field">dominant_risk</span><span class="type">RiskCategory</span><span class="desc">// highest-priority risk category</span></div>
+        <div><span class="field">secondary_risks</span><span class="type">RiskCategory[]</span><span class="desc">// other non-LOW categories</span></div>
+        <div><span class="field">top_signals</span><span class="type">TopSignals</span></div>
+        <div class="indent">
+          <div><span class="field">wind</span><span class="type">CALM | BREEZY | STRONG | VERY_STRONG</span></div>
+          <div><span class="field">temp_feel</span><span class="type">COMFORTABLE | COOL | COLD | VERY_COLD</span></div>
+          <div><span class="field">rain</span><span class="type">DRY | LIGHT | RAIN_LIKELY</span></div>
+          <div><span class="field">exposure</span><span class="type">boolean</span><span class="desc">// ridge wind ≥45 km/h or gusts ≥50 km/h</span></div>
+          <div><span class="field">confidence</span><span class="type">HIGH | MEDIUM | LOW</span></div>
+        </div>
+        <div><span class="field">confidence_detail</span><span class="type">string</span><span class="desc">// e.g. "Spread wind 4 km/h | precip 0.1 mm/h | temp 1.2°"</span></div>
+        <div><span class="field">key_risks</span><span class="type">RiskKey[]</span><span class="desc">// top 5 risk indicators sorted by severity</span></div>
+        <div class="indent">
+          <div><span class="field">type</span><span class="type">RIDGE_WIND | GUSTS | PRECIP | FREEZING_LEVEL | VISIBILITY | THUNDER | THERMAL</span></div>
+          <div><span class="field">level</span><span class="type">LOW | MODERATE | HIGH</span></div>
+          <div><span class="field">value</span><span class="type">string</span><span class="desc">// human-readable measurement</span></div>
+        </div>
+        <div><span class="field">risk_drivers</span><span class="type">RiskDriver[]</span><span class="desc">// % of hours each category was active</span></div>
+        <div><span class="field">timing_notes</span><span class="type">string[]</span><span class="desc">// up to 3 event timing observations</span></div>
+        <div><span class="field">threshold_notes</span><span class="type">string[]</span><span class="desc">// safety thresholds for dominant risk</span></div>
+        <div><span class="field">implications</span><span class="type">string[]</span><span class="desc">// practical consequences for alpine users</span></div>
+      </div>
+
+      <h3>RiskSnapshot (24-hour window)</h3>
+      <div class="tree">
+        <div><span class="field">wind_surface_max</span><span class="type">float</span><span class="desc">// km/h at 10 m</span></div>
+        <div><span class="field">wind_gust_max</span><span class="type">float</span><span class="desc">// km/h</span></div>
+        <div><span class="field">ridge_1500_max</span><span class="type">float</span><span class="desc">// wind at ~850 hPa (~1500 m)</span></div>
+        <div><span class="field">ridge_3000_max</span><span class="type">float</span><span class="desc">// wind at ~700 hPa (~3000 m)</span></div>
+        <div><span class="field">ridge_5600_max</span><span class="type">float</span><span class="desc">// wind at ~500 hPa (~5600 m)</span></div>
+        <div><span class="field">precip_total</span><span class="type">float</span><span class="desc">// mm accumulated</span></div>
+        <div><span class="field">precip_start / precip_end / precip_peak</span><span class="type">string | null</span><span class="desc">// HH:MM</span></div>
+        <div><span class="field">precip_type</span><span class="type">string</span><span class="desc">// Rain | Snow | Freezing rain | Ice pellets | …</span></div>
+        <div><span class="field">freezing_level_min</span><span class="type">int | null</span><span class="desc">// metres MSL</span></div>
+        <div><span class="field">freezing_trend</span><span class="type">int</span><span class="desc">// metres change; positive = rising</span></div>
+        <div><span class="field">visibility_min</span><span class="type">float</span><span class="desc">// metres</span></div>
+        <div><span class="field">temp_min / temp_max</span><span class="type">float</span><span class="desc">// °C at 2 m</span></div>
+        <div><span class="field">wind_chill_min</span><span class="type">float | null</span><span class="desc">// °C (only when wind >4.8 km/h and temp ≤10°C)</span></div>
+        <div><span class="field">snow_total</span><span class="type">float</span><span class="desc">// cm</span></div>
+        <div><span class="field">wind_loading</span><span class="type">boolean</span><span class="desc">// snowfall ≥1 cm/h + 700 hPa wind ≥40 km/h</span></div>
+        <div><span class="field">cape_max</span><span class="type">float</span><span class="desc">// J/kg</span></div>
+      </div>
+
+      <h3>DailyRiskSummary</h3>
+      <div class="tree">
+        <div><span class="field">date</span><span class="type">string</span><span class="desc">// YYYY-MM-DD</span></div>
+        <div><span class="field">risk_level</span><span class="type">LOW | MODERATE | HIGH</span><span class="desc">// compound-escalated overall level</span></div>
+        <div><span class="field">dominant_risk</span><span class="type">RiskCategory</span></div>
+        <div><span class="field">confidence</span><span class="type">HIGH | MEDIUM | LOW</span></div>
+        <div><span class="field">segments</span><span class="type">DaySegment[4]</span><span class="desc">// NIGHT · MORNING · AFTERNOON · EVENING</span></div>
+        <div class="indent">
+          <div><span class="field">condition</span><span class="type">CLEAR | PARTLY | CLOUDY | WINDY | RAIN | SNOW | STORM</span></div>
+          <div><span class="field">temp_low / temp_high</span><span class="type">float</span></div>
+          <div><span class="field">wind_max / gust_max</span><span class="type">float</span><span class="desc">// km/h</span></div>
+          <div><span class="field">wind_direction</span><span class="type">int</span><span class="desc">// degrees</span></div>
+          <div><span class="field">precip_amount</span><span class="type">float</span><span class="desc">// mm</span></div>
+        </div>
+      </div>
+    </section>
+
+    <hr />
+
+    <!-- Risk categories -->
+    <section id="risk-categories">
+      <h2>Risk Categories</h2>
+      <p>Each category is independently rated <span class="badge badge-low">LOW</span> <span class="badge badge-mod">MODERATE</span> <span class="badge badge-high">HIGH</span>. The daily overall <code>risk_level</code> is escalated to HIGH if any individual category is HIGH, or if three or more are MODERATE (compound hazard).</p>
+
+      <div class="risk-grid">
+        <div class="risk-card wind">
+          <h4>WIND</h4>
+          <p>Based on 700 hPa ridge wind (~3000 m) and 10 m gusts.</p>
+        </div>
+        <div class="risk-card precip">
+          <h4>PRECIP</h4>
+          <p>Prioritises peak hourly rate over total accumulation.</p>
+        </div>
+        <div class="risk-card vis">
+          <h4>VISIBILITY</h4>
+          <p>Minimum surface visibility in metres.</p>
+        </div>
+        <div class="risk-card thunder">
+          <h4>THUNDER</h4>
+          <p>CAPE J/kg — tuned for Balkan afternoon convection.</p>
+        </div>
+        <div class="risk-card freezing">
+          <h4>FREEZING</h4>
+          <p>Freezing precipitation type codes or freezing level ≤2200 m.</p>
+        </div>
+        <div class="risk-card thermal">
+          <h4>THERMAL</h4>
+          <p>Wind chill using the Environment Canada formula.</p>
+        </div>
+      </div>
+    </section>
+
+    <hr />
+
+    <!-- Thresholds -->
+    <section id="thresholds">
+      <h2>Thresholds</h2>
+      <table>
+        <thead><tr><th>Category</th><th>MODERATE</th><th>HIGH</th></tr></thead>
+        <tbody>
+          <tr><td>Wind (ridge)</td><td>≥ 45 km/h</td><td>≥ 60 km/h</td></tr>
+          <tr><td>Wind (gusts)</td><td>≥ 50 km/h</td><td>≥ 70 km/h</td></tr>
+          <tr><td>Precip rate</td><td>≥ 2 mm/hr</td><td>≥ 5 mm/hr</td></tr>
+          <tr><td>Precip total</td><td>≥ 10 mm</td><td>≥ 30 mm</td></tr>
+          <tr><td>Visibility</td><td>&lt; 1000 m</td><td>&lt; 200 m</td></tr>
+          <tr><td>CAPE</td><td>≥ 600 J/kg</td><td>≥ 1500 J/kg</td></tr>
+          <tr><td>Freezing level</td><td>≤ 2200 m or below 1500 m</td><td>Freezing precip detected</td></tr>
+          <tr><td>Wind chill</td><td>≤ 0 °C</td><td>≤ −10 °C</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <hr />
+
+    <!-- Weather models -->
+    <section id="models">
+      <h2>Weather Models</h2>
+      <p>All data is sourced from <a href="https://open-meteo.com" target="_blank">Open-Meteo</a>. The four models are fetched concurrently. ECMWF is required; the others are best-effort.</p>
+
+      <table>
+        <thead><tr><th>Model</th><th>Role</th><th>Fields fetched</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>ECMWF IFS</td>
+            <td>Primary — all risk calculations use this</td>
+            <td>26 hourly fields including pressure-level wind, temp, geopotential, CAPE, visibility, precipitation type</td>
+          </tr>
+          <tr>
+            <td>GFS</td>
+            <td>Spread model</td>
+            <td><code>temperature_2m</code>, <code>wind_speed_10m</code>, <code>precipitation</code></td>
+          </tr>
+          <tr>
+            <td>GEM (Canadian)</td>
+            <td>Spread model</td>
+            <td>same as GFS</td>
+          </tr>
+          <tr>
+            <td>ICON (DWD)</td>
+            <td>Spread model</td>
+            <td>same as GFS</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <hr />
+
+    <!-- Confidence -->
+    <section id="confidence">
+      <h2>Confidence Scoring</h2>
+      <p>Confidence reflects model agreement across ECMWF, GFS, GEM, and ICON for the first 24-hour horizon. Spread is measured as max − min of each model's 24-hour average.</p>
+
+      <table>
+        <thead><tr><th>Level</th><th>Wind spread</th><th>Precip spread</th><th>Temp spread</th></tr></thead>
+        <tbody>
+          <tr><td><span class="badge badge-low">HIGH</span></td><td>&lt; 6 km/h</td><td>&lt; 1.5 mm/h</td><td>&lt; 2 °C</td></tr>
+          <tr><td><span class="badge badge-mod">MEDIUM</span></td><td>6 – 12 km/h</td><td>1.5 – 3 mm/h</td><td>2 – 4 °C</td></tr>
+          <tr><td><span class="badge badge-high">LOW</span></td><td>≥ 12 km/h</td><td>≥ 3 mm/h</td><td>≥ 4 °C</td></tr>
+        </tbody>
+      </table>
+
+      <p>If GFS, GEM, and ICON all fail, confidence is <code>LOW</code> with detail <code>"Single-source"</code>.</p>
+    </section>
+
+    <hr />
+
+    <!-- Cache -->
+    <section id="cache">
+      <h2>Spatial Cache</h2>
+      <p>The server keeps an in-memory list of recent forecasts. On each request the Haversine distance to every cached entry is checked. A cache hit is returned if a live entry exists within <strong>1 km</strong> of the requested coordinates.</p>
+
+      <table>
+        <thead><tr><th>Property</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td>TTL</td><td>10 minutes</td></tr>
+          <tr><td>Radius</td><td>1 km (Haversine)</td></tr>
+          <tr><td>Eviction</td><td>Expired entries are dropped on each <code>cachePut</code> call</td></tr>
+          <tr><td>X-Cache header</td><td><code>HIT</code> if served from cache, <code>MISS</code> if fresh fetch</td></tr>
+        </tbody>
+      </table>
+
+      <pre><code><span class="cmt"># These two requests will share a cached response (< 1 km apart)</span>
+curl "<span class="url">http://localhost:8080/forecast?lat=41.3301&lon=19.8201</span>"
+curl "<span class="url">http://localhost:8080/forecast?lat=41.3310&lon=19.8215</span>"</code></pre>
+    </section>
+
+  </main>
+</div>
+
+<script>
+  // Highlight active nav link on scroll
+  const sections = document.querySelectorAll('section[id]');
+  const links = document.querySelectorAll('nav a');
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const active = document.querySelector(`nav a[href="#${e.target.id}"]`);
+        if (active) active.classList.add('active');
+      }
+    });
+  }, { threshold: 0.4 });
+  sections.forEach(s => observer.observe(s));
+</script>
+</body>
+</html>
