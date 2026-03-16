@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -15,9 +16,9 @@ import (
 // ── Spatial in-memory cache (1 km radius) ────────────────────────────────────
 
 const (
-	cacheTTL       = 10 * time.Minute
-	cacheRadiusKm  = 1.0
-	earthRadiusKm  = 6371.0
+	cacheTTL      = 10 * time.Minute
+	cacheRadiusKm = 1.0
+	earthRadiusKm = 6371.0
 )
 
 type cacheEntry struct {
@@ -114,61 +115,129 @@ func getForecast(lat, lon float64) (*RiskForecast, bool, error) {
 // ── Simple forecast response ──────────────────────────────────────────────────
 
 type SimpleDay struct {
-	Date             string  `json:"date"`
-	Risk             string  `json:"risk"`
-	Condition        string  `json:"condition"`
-	TempMin          float64 `json:"temp_min"`
-	TempMax          float64 `json:"temp_max"`
-	WindMax          float64 `json:"wind_max"`
-	GustMax          float64 `json:"gust_max"`
-	PrecipMm         float64 `json:"precip_mm"`
-	SnowCm           float64 `json:"snow_cm"`
-	FreezingLevelM   *int    `json:"freezing_level_m"`
-	VisibilityMin    float64 `json:"visibility_min_m"`
-	Confidence       string  `json:"confidence"`
-	DominantRisk     string  `json:"dominant_risk"`
+	Date          string  `json:"date"`
+	Summary       string  `json:"summary"`
+	Condition     string  `json:"condition"`
+	Risk          string  `json:"risk"`
+	Confidence    string  `json:"confidence"`
+	TempMinC      float64 `json:"temp_min_c"`
+	TempMaxC      float64 `json:"temp_max_c"`
+	PrecipMm      float64 `json:"precip_mm"`
+	SnowCm        float64 `json:"snow_cm"`
+	WindMaxKmh    float64 `json:"wind_max_kmh"`
+	GustMaxKmh    float64 `json:"gust_max_kmh"`
+	WindDirection int     `json:"wind_direction"`
+	VisibilityKm  float64 `json:"visibility_km"`
 }
 
-type SimpleForecast struct {
-	Timezone string      `json:"timezone"`
-	Sources  []string    `json:"sources"`
-	Days     []SimpleDay `json:"days"`
+func toSimpleDays(f *RiskForecast) []SimpleDay {
+	limit := min(10, len(f.Days))
+	days := make([]SimpleDay, 0, limit)
+	for i := 0; i < limit; i++ {
+		d := f.Days[i]
+		condition := simpleCondition(d)
+		days = append(days, SimpleDay{
+			Date:          d.Date,
+			Summary:       simpleSummary(d, condition),
+			Condition:     condition,
+			Risk:          strings.ToLower(d.RiskLevel.String()),
+			Confidence:    strings.ToLower(string(d.Confidence)),
+			TempMinC:      round1(d.TempMin),
+			TempMaxC:      round1(d.TempMax),
+			PrecipMm:      round1(d.PrecipSum),
+			SnowCm:        round1(d.SnowSum),
+			WindMaxKmh:    round1(d.WindMax),
+			GustMaxKmh:    round1(d.GustMax),
+			WindDirection: d.WindDirection,
+			VisibilityKm:  round1(d.VisibilityMin / 1000),
+		})
+	}
+	return days
 }
 
-func toSimple(f *RiskForecast) SimpleForecast {
-	days := make([]SimpleDay, len(f.Days))
-	for i, d := range f.Days {
-		// Pick the dominant condition across the day's segments
-		cond := string(CondClear)
-		for _, seg := range d.Segments {
-			if conditionOrdinal(seg.Condition) > conditionOrdinal(Condition(cond)) {
-				cond = string(seg.Condition)
-			}
-		}
-		days[i] = SimpleDay{
-			Date:           d.Date,
-			Risk:           d.RiskLevel.String(),
-			Condition:      cond,
-			TempMin:        round1(d.TempMin),
-			TempMax:        round1(d.TempMax),
-			WindMax:        round1(d.WindMax),
-			GustMax:        round1(d.GustMax),
-			PrecipMm:       round1(d.PrecipSum),
-			SnowCm:         round1(d.SnowSum),
-			FreezingLevelM: d.FreezingLevelMin,
-			VisibilityMin:  d.VisibilityMin,
-			Confidence:     string(d.Confidence),
-			DominantRisk:   string(d.DominantRisk),
+func simpleCondition(d DailyRiskSummary) string {
+	switch {
+	case hasSegmentCondition(d.Segments, CondStorm) || d.DominantRisk == CatThunder:
+		return "storm"
+	case d.SnowSum >= 1 || hasSegmentCondition(d.Segments, CondSnow):
+		return "snow"
+	case d.PrecipSum >= 1 || hasSegmentCondition(d.Segments, CondRain):
+		return "rain"
+	case d.VisibilityMin > 0 && d.VisibilityMin < 1000:
+		return "low_visibility"
+	case d.WindMax >= 35 || d.GustMax >= 50 || hasSegmentCondition(d.Segments, CondWindy):
+		return "windy"
+	}
+
+	cloudySegments := 0
+	partlySegments := 0
+	for _, seg := range d.Segments {
+		switch seg.Condition {
+		case CondCloudy:
+			cloudySegments++
+		case CondPartly:
+			partlySegments++
 		}
 	}
-	return SimpleForecast{Timezone: f.Timezone, Sources: f.Sources, Days: days}
+
+	switch {
+	case cloudySegments >= 2:
+		return "cloudy"
+	case cloudySegments+partlySegments >= 2:
+		return "partly_cloudy"
+	default:
+		return "clear"
+	}
 }
 
-func conditionOrdinal(c Condition) int {
-	return map[Condition]int{
-		CondClear: 0, CondPartly: 1, CondCloudy: 2,
-		CondWindy: 3, CondRain: 4, CondSnow: 5, CondStorm: 6,
-	}[c]
+func simpleSummary(d DailyRiskSummary, condition string) string {
+	switch condition {
+	case "storm":
+		return "Thunderstorms possible"
+	case "snow":
+		switch {
+		case d.WindMax >= 35 || d.GustMax >= 50:
+			return "Snow and wind"
+		case d.SnowSum >= 5:
+			return "Snow likely"
+		default:
+			return "Some snow"
+		}
+	case "rain":
+		switch {
+		case d.WindMax >= 35 || d.GustMax >= 50:
+			return "Rain and wind"
+		case d.PrecipSum >= 10:
+			return "Wet day"
+		default:
+			return "Some rain"
+		}
+	case "low_visibility":
+		if d.VisibilityMin < 200 {
+			return "Very low visibility"
+		}
+		return "Low visibility"
+	case "windy":
+		if d.GustMax >= 70 {
+			return "Very windy"
+		}
+		return "Windy"
+	case "cloudy":
+		return "Mostly cloudy"
+	case "partly_cloudy":
+		return "Partly cloudy"
+	default:
+		return "Mostly clear"
+	}
+}
+
+func hasSegmentCondition(segments []DaySegment, target Condition) bool {
+	for _, seg := range segments {
+		if seg.Condition == target {
+			return true
+		}
+	}
+	return false
 }
 
 func round1(v float64) float64 {
@@ -224,7 +293,7 @@ func handleSimpleForecast(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.Header().Set("X-Cache", "MISS")
 	}
-	json.NewEncoder(w).Encode(toSimple(forecast))
+	json.NewEncoder(w).Encode(toSimpleDays(forecast))
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {

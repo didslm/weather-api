@@ -215,6 +215,16 @@ func buildDailySummaries(s *hourlySeries) []DailyRiskSummary {
 		temps := pickFloats(s.temperature2m, indices)
 		winds := pickFloats(s.windSpeed10m, indices)
 		gusts := pickFloats(s.windGusts10m, indices)
+		windDirDaily := 0
+		if len(indices) > 0 {
+			maxWIdx := indices[0]
+			for _, idx := range indices {
+				if s.windSpeed10m[idx] > s.windSpeed10m[maxWIdx] {
+					maxWIdx = idx
+				}
+			}
+			windDirDaily = int(math.Round(s.windDirection10m[maxWIdx]))
+		}
 		precip := pickFloats(s.precipitation, indices)
 		snow := pickFloats(s.snowfall, indices)
 		ridge := pickFloats(s.wind700, indices)
@@ -325,6 +335,7 @@ func buildDailySummaries(s *hourlySeries) []DailyRiskSummary {
 			TempMax:          maxSlice(temps),
 			WindMax:          maxSlice(winds),
 			GustMax:          maxSlice(gusts),
+			WindDirection:    windDirDaily,
 			PrecipSum:        sumSlice(precip),
 			SnowSum:          sumSlice(snow),
 			FreezingLevelMin: freezingMin,

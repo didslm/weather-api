@@ -178,6 +178,7 @@ type DailyRiskSummary struct {
 	TempMax          float64         `json:"temp_max"`
 	WindMax          float64         `json:"wind_max"`
 	GustMax          float64         `json:"gust_max"`
+	WindDirection    int             `json:"wind_direction"`
 	PrecipSum        float64         `json:"precip_sum"`
 	SnowSum          float64         `json:"snow_sum"`
 	FreezingLevelMin *int            `json:"freezing_level_min"`
