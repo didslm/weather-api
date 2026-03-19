@@ -3,12 +3,16 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sync"
+	"time"
 )
 
 const baseURL = "https://api.open-meteo.com"
+
+var forecastHTTPClient = &http.Client{Timeout: 8 * time.Second}
 
 var ecmwfFields = "temperature_2m,wind_speed_10m,wind_gusts_10m,wind_direction_10m," +
 	"precipitation,rain,snowfall,precipitation_type,visibility,cape,convective_inhibition," +
@@ -53,7 +57,10 @@ func FetchAll(lat, lon float64) (ecmwf *OpenMeteoResponse, spread []*OpenMeteoRe
 	wg.Wait()
 
 	if results[0].err != nil || results[0].response == nil {
-		return nil, nil, nil, fmt.Errorf("ECMWF fetch failed: %w", results[0].err)
+		if results[0].err != nil {
+			return nil, nil, nil, fmt.Errorf("ECMWF fetch failed: %w", results[0].err)
+		}
+		return nil, nil, nil, fmt.Errorf("ECMWF fetch failed: empty response")
 	}
 
 	ecmwf = results[0].response
@@ -78,19 +85,20 @@ func fetchModel(path, fields string, lat, lon float64) (*OpenMeteoResponse, erro
 	q.Set("timezone", "auto")
 	u.RawQuery = q.Encode()
 
-	resp, err := http.Get(u.String())
+	resp, err := forecastHTTPClient.Get(u.String())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("request %s failed: %w", path, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, path)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return nil, fmt.Errorf("HTTP %d from %s body=%q", resp.StatusCode, path, string(body))
 	}
 
 	var result OpenMeteoResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode %s response failed: %w", path, err)
 	}
 	return &result, nil
 }

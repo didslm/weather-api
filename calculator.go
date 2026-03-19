@@ -1060,8 +1060,12 @@ func hourFromTime(t string) int {
 	if len(after) < 2 {
 		return 0
 	}
+	clock := after[1]
+	if len(clock) < 2 {
+		return 0
+	}
 	h := 0
-	fmt.Sscanf(after[1][:2], "%d", &h)
+	fmt.Sscanf(clock[:2], "%d", &h)
 	return h
 }
 

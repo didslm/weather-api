@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -248,18 +249,18 @@ func round1(v float64) float64 {
 
 func handleForecast(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("lat") == "" || r.URL.Query().Get("lon") == "" {
-		http.Error(w, `{"error":"lat and lon query params required"}`, http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "lat and lon query params required")
 		return
 	}
 	lat, lon, err := parsLatLon(r)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	forecast, hit, err := getForecast(lat, lon)
 	if err != nil {
-		log.Printf("getForecast error: %v", err)
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusBadGateway)
+		log.Printf("getForecast error path=%s lat=%.5f lon=%.5f err=%v", r.URL.Path, lat, lon, err)
+		writeJSONError(w, http.StatusBadGateway, "forecast upstream failed")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -268,23 +269,25 @@ func handleForecast(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.Header().Set("X-Cache", "MISS")
 	}
-	json.NewEncoder(w).Encode(forecast)
+	if err := json.NewEncoder(w).Encode(forecast); err != nil {
+		log.Printf("response encode error path=%s lat=%.5f lon=%.5f err=%v", r.URL.Path, lat, lon, err)
+	}
 }
 
 func handleSimpleForecast(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("lat") == "" || r.URL.Query().Get("lon") == "" {
-		http.Error(w, `{"error":"lat and lon query params required"}`, http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "lat and lon query params required")
 		return
 	}
 	lat, lon, err := parsLatLon(r)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err), http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	forecast, hit, err := getForecast(lat, lon)
 	if err != nil {
-		log.Printf("getForecast error: %v", err)
-		http.Error(w, fmt.Sprintf(`{"error":"%s"}`, err.Error()), http.StatusBadGateway)
+		log.Printf("getForecast error path=%s lat=%.5f lon=%.5f err=%v", r.URL.Path, lat, lon, err)
+		writeJSONError(w, http.StatusBadGateway, "forecast upstream failed")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -293,7 +296,9 @@ func handleSimpleForecast(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.Header().Set("X-Cache", "MISS")
 	}
-	json.NewEncoder(w).Encode(toSimpleDays(forecast))
+	if err := json.NewEncoder(w).Encode(toSimpleDays(forecast)); err != nil {
+		log.Printf("response encode error path=%s lat=%.5f lon=%.5f err=%v", r.URL.Path, lat, lon, err)
+	}
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -301,12 +306,32 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, `{"status":"ok"}`)
 }
 
+func writeJSONError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+func withRecovery(name string, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("panic route=%s method=%s path=%s query=%q panic=%v\n%s", name, r.Method, r.URL.Path, r.URL.RawQuery, rec, debug.Stack())
+				writeJSONError(w, http.StatusBadGateway, "forecast processing failed")
+			}
+			log.Printf("request route=%s method=%s path=%s duration_ms=%d", name, r.Method, r.URL.Path, time.Since(start).Milliseconds())
+		}()
+		next(w, r)
+	}
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 func main() {
-	http.HandleFunc("/forecast", handleForecast)
-	http.HandleFunc("/forecast/simple", handleSimpleForecast)
-	http.HandleFunc("/health", handleHealth)
+	http.HandleFunc("/forecast", withRecovery("forecast", handleForecast))
+	http.HandleFunc("/forecast/simple", withRecovery("forecast_simple", handleSimpleForecast))
+	http.HandleFunc("/health", withRecovery("health", handleHealth))
 
 	port := os.Getenv("PORT")
 	if port == "" {
