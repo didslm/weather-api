@@ -121,3 +121,61 @@ func TestSimpleConditionPriority(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildLiveWindowResponseUsesEnvelopeShape(t *testing.T) {
+	forecast := &RiskForecast{
+		Timezone: "Europe/Berlin",
+		Sources:  []string{"ecmwf", "gfs"},
+		Brief: GuideBrief{
+			TopSignals: TopSignals{
+				Confidence: ConfMedium,
+			},
+		},
+		Days: []DailyRiskSummary{
+			{
+				Date:       "2026-03-23",
+				RiskLevel:  RiskLow,
+				Confidence: ConfHigh,
+				Segments: []DaySegment{
+					{Condition: CondClear},
+					{Condition: CondPartly},
+				},
+			},
+			{
+				Date:       "2026-03-24",
+				RiskLevel:  RiskModerate,
+				Confidence: ConfMedium,
+				Segments: []DaySegment{
+					{Condition: CondRain},
+					{Condition: CondCloudy},
+				},
+			},
+		},
+	}
+
+	resp := buildLiveWindowResponse(forecast, "", 10, forecast.Days)
+	if resp.Mode != "live_forecast" {
+		t.Fatalf("unexpected mode: %q", resp.Mode)
+	}
+	if resp.Confidence != "medium" {
+		t.Fatalf("unexpected confidence: %q", resp.Confidence)
+	}
+	if resp.Basis == "" {
+		t.Fatalf("expected basis to be populated")
+	}
+	if resp.StartDate != "2026-03-23" {
+		t.Fatalf("unexpected start date: %q", resp.StartDate)
+	}
+	if resp.DaysRequested != 10 {
+		t.Fatalf("unexpected days requested: %d", resp.DaysRequested)
+	}
+	if len(resp.Days) != 2 {
+		t.Fatalf("expected 2 day entries, got %d", len(resp.Days))
+	}
+	if resp.Timezone != "Europe/Berlin" {
+		t.Fatalf("unexpected timezone: %q", resp.Timezone)
+	}
+	if len(resp.Sources) != 2 || resp.Sources[0] != "ecmwf" {
+		t.Fatalf("unexpected sources: %+v", resp.Sources)
+	}
+}

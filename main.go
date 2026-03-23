@@ -183,6 +183,42 @@ type WindowForecastResponse struct {
 	Days          []SimpleDay `json:"days"`
 }
 
+func buildLiveWindowResponse(forecast *RiskForecast, startDate string, days int, input []DailyRiskSummary) WindowForecastResponse {
+	if days < 1 {
+		days = 1
+	}
+	timezone := ""
+	sources := []string{}
+	confidence := "low"
+	if forecast != nil {
+		timezone = forecast.Timezone
+		sources = forecast.Sources
+		if c := strings.TrimSpace(string(forecast.Brief.TopSignals.Confidence)); c != "" {
+			confidence = strings.ToLower(c)
+		}
+	}
+
+	simple := toSimpleDaysFromSlice(input, days)
+	if startDate == "" {
+		if len(simple) > 0 {
+			startDate = simple[0].Date
+		} else {
+			startDate = toDateOnly(time.Now().UTC()).Format("2006-01-02")
+		}
+	}
+
+	return WindowForecastResponse{
+		StartDate:     startDate,
+		DaysRequested: days,
+		Mode:          "live_forecast",
+		Confidence:    confidence,
+		Basis:         "open-meteo numerical weather prediction",
+		Timezone:      timezone,
+		Sources:       sources,
+		Days:          simple,
+	}
+}
+
 func simpleCondition(d DailyRiskSummary) string {
 	switch {
 	case hasSegmentCondition(d.Segments, CondStorm) || d.DominantRisk == CatThunder:
@@ -441,16 +477,7 @@ func handleWindowForecast(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusBadGateway, "forecast window unavailable from upstream")
 			return
 		}
-		resp := WindowForecastResponse{
-			StartDate:     startDate.Format("2006-01-02"),
-			DaysRequested: days,
-			Mode:          "live_forecast",
-			Confidence:    "high",
-			Basis:         "open-meteo numerical weather prediction",
-			Timezone:      forecast.Timezone,
-			Sources:       forecast.Sources,
-			Days:          toSimpleDaysFromSlice(window, days),
-		}
+		resp := buildLiveWindowResponse(forecast, startDate.Format("2006-01-02"), days, window)
 		if err := json.NewEncoder(w).Encode(resp); err != nil {
 			log.Printf("response encode error path=%s lat=%.5f lon=%.5f err=%v", r.URL.Path, lat, lon, err)
 		}
@@ -523,7 +550,9 @@ func handleSimpleForecast(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.Header().Set("X-Cache", "MISS")
 	}
-	if err := json.NewEncoder(w).Encode(toSimpleDays(forecast)); err != nil {
+
+	resp := buildLiveWindowResponse(forecast, "", 10, forecast.Days)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("response encode error path=%s lat=%.5f lon=%.5f err=%v", r.URL.Path, lat, lon, err)
 	}
 }
