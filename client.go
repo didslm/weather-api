@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -31,7 +32,14 @@ type modelResult struct {
 }
 
 // FetchAll calls ECMWF (required) + GFS/GEM/ICON (optional) in parallel.
-func FetchAll(lat, lon float64) (ecmwf *OpenMeteoResponse, spread []*OpenMeteoResponse, sources []string, err error) {
+func FetchAll(lat, lon float64, forecastDays int) (ecmwf *OpenMeteoResponse, spread []*OpenMeteoResponse, sources []string, err error) {
+	if forecastDays < 1 {
+		forecastDays = 1
+	}
+	if forecastDays > 16 {
+		forecastDays = 16
+	}
+
 	type endpoint struct {
 		name   string
 		path   string
@@ -50,7 +58,7 @@ func FetchAll(lat, lon float64) (ecmwf *OpenMeteoResponse, spread []*OpenMeteoRe
 		wg.Add(1)
 		go func(i int, ep endpoint) {
 			defer wg.Done()
-			resp, fetchErr := fetchModel(ep.path, ep.fields, lat, lon)
+			resp, fetchErr := fetchModel(ep.path, ep.fields, lat, lon, forecastDays)
 			results[i] = modelResult{name: ep.name, response: resp, err: fetchErr}
 		}(i, ep)
 	}
@@ -75,13 +83,13 @@ func FetchAll(lat, lon float64) (ecmwf *OpenMeteoResponse, spread []*OpenMeteoRe
 	return ecmwf, spread, sources, nil
 }
 
-func fetchModel(path, fields string, lat, lon float64) (*OpenMeteoResponse, error) {
+func fetchModel(path, fields string, lat, lon float64, forecastDays int) (*OpenMeteoResponse, error) {
 	u, _ := url.Parse(baseURL + path)
 	q := u.Query()
 	q.Set("latitude", fmt.Sprintf("%f", lat))
 	q.Set("longitude", fmt.Sprintf("%f", lon))
 	q.Set("hourly", fields)
-	q.Set("forecast_days", "10")
+	q.Set("forecast_days", strconv.Itoa(forecastDays))
 	q.Set("timezone", "auto")
 	u.RawQuery = q.Encode()
 

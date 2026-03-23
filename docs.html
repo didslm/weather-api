@@ -247,6 +247,7 @@
 
       <li><div class="section-label">API Reference</div></li>
       <li><a href="#endpoint">Endpoint</a></li>
+      <li><a href="#window-endpoint">Window Endpoint</a></li>
       <li><a href="#response">Response Schema</a></li>
       <li><a href="#risk-categories">Risk Categories</a></li>
       <li><a href="#thresholds">Thresholds</a></li>
@@ -363,6 +364,105 @@ go run .
         <span>/health</span>
       </div>
       <p>Returns <code>{"status":"ok"}</code>. Suitable for load balancer health checks.</p>
+    </section>
+
+    <hr />
+
+    <!-- Window endpoint -->
+    <section id="window-endpoint">
+      <h2>Window Endpoint</h2>
+
+      <div class="endpoint">
+        <span class="badge badge-get">GET</span>
+        <span>/forecast/window</span>
+      </div>
+
+      <p>
+        Returns a requested weather window (up to 10 days) from a specific start date.
+        Near-term windows use live model forecast; farther dates return a clearly-labeled long-range outlook.
+      </p>
+
+      <table>
+        <thead>
+          <tr><th>Parameter</th><th>Type</th><th></th><th>Description</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>lat</td>
+            <td>float</td>
+            <td><span class="badge badge-req">required</span></td>
+            <td>Latitude in decimal degrees</td>
+          </tr>
+          <tr>
+            <td>lon</td>
+            <td>float</td>
+            <td><span class="badge badge-req">required</span></td>
+            <td>Longitude in decimal degrees</td>
+          </tr>
+          <tr>
+            <td>start_date</td>
+            <td>string</td>
+            <td><span class="badge badge-req">required</span></td>
+            <td>Window start date in <code>YYYY-MM-DD</code> format</td>
+          </tr>
+          <tr>
+            <td>days</td>
+            <td>int</td>
+            <td><span class="badge badge-opt">optional</span></td>
+            <td>Days in window, <code>1..10</code>. Default <code>10</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Modes</h3>
+      <table>
+        <thead><tr><th>mode</th><th>When used</th><th>confidence</th><th>basis</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>live_forecast</code></td>
+            <td>Requested window fits the live model horizon</td>
+            <td><code>high</code></td>
+            <td>Open-Meteo numerical weather prediction</td>
+          </tr>
+          <tr>
+            <td><code>long_range_outlook</code></td>
+            <td>Requested date is beyond live horizon</td>
+            <td><code>low</code></td>
+            <td>Climatology-style placeholder baseline</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Example request</h3>
+      <pre><code>curl "<span class="url">http://localhost:8080/forecast/window?lat=41.33&lon=19.82&start_date=2026-08-15&days=10</span>"</code></pre>
+
+      <h3>Example response (shape)</h3>
+      <pre><code>{
+  <span class="key">"start_date"</span>: <span class="str">"2026-08-15"</span>,
+  <span class="key">"days_requested"</span>: <span class="num">10</span>,
+  <span class="key">"mode"</span>: <span class="str">"long_range_outlook"</span>,
+  <span class="key">"confidence"</span>: <span class="str">"low"</span>,
+  <span class="key">"basis"</span>: <span class="str">"climatology-style synthetic baseline (placeholder)"</span>,
+  <span class="key">"timezone"</span>: <span class="str">"UTC"</span>,
+  <span class="key">"sources"</span>: [<span class="str">"internal_placeholder_normals_v1"</span>],
+  <span class="key">"days"</span>: [
+    {
+      <span class="key">"date"</span>: <span class="str">"2026-08-15"</span>,
+      <span class="key">"summary"</span>: <span class="str">"Seasonal outlook"</span>,
+      <span class="key">"condition"</span>: <span class="str">"partly_cloudy"</span>,
+      <span class="key">"risk"</span>: <span class="str">"low"</span>,
+      <span class="key">"confidence"</span>: <span class="str">"low"</span>,
+      <span class="key">"temp_min_c"</span>: <span class="num">18.2</span>,
+      <span class="key">"temp_max_c"</span>: <span class="num">27.9</span>,
+      <span class="key">"precip_mm"</span>: <span class="num">2.8</span>,
+      <span class="key">"snow_cm"</span>: <span class="num">0</span>,
+      <span class="key">"wind_max_kmh"</span>: <span class="num">18.7</span>,
+      <span class="key">"gust_max_kmh"</span>: <span class="num">27.1</span>,
+      <span class="key">"wind_direction"</span>: <span class="num">207</span>,
+      <span class="key">"visibility_km"</span>: <span class="num">9.0</span>
+    }
+  ]
+}</code></pre>
     </section>
 
     <hr />

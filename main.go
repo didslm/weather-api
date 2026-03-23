@@ -20,6 +20,7 @@ const (
 	cacheTTL      = 10 * time.Minute
 	cacheRadiusKm = 1.0
 	earthRadiusKm = 6371.0
+	liveMaxDays   = 16
 )
 
 type cacheEntry struct {
@@ -101,7 +102,7 @@ func getForecast(lat, lon float64) (*RiskForecast, bool, error) {
 	if cached := cacheGet(lat, lon); cached != nil {
 		return cached, true, nil
 	}
-	ecmwf, spreads, sources, err := FetchAll(lat, lon)
+	ecmwf, spreads, sources, err := FetchAll(lat, lon, 10)
 	if err != nil {
 		return nil, false, err
 	}
@@ -111,6 +112,14 @@ func getForecast(lat, lon float64) (*RiskForecast, bool, error) {
 	}
 	cachePut(lat, lon, forecast)
 	return forecast, false, nil
+}
+
+func getForecastForDays(lat, lon float64, forecastDays int) (*RiskForecast, error) {
+	ecmwf, spreads, sources, err := FetchAll(lat, lon, forecastDays)
+	if err != nil {
+		return nil, err
+	}
+	return BuildRiskForecast(ecmwf, spreads, sources)
 }
 
 // ── Simple forecast response ──────────────────────────────────────────────────
@@ -132,10 +141,17 @@ type SimpleDay struct {
 }
 
 func toSimpleDays(f *RiskForecast) []SimpleDay {
-	limit := min(10, len(f.Days))
+	return toSimpleDaysFromSlice(f.Days, 10)
+}
+
+func toSimpleDaysFromSlice(input []DailyRiskSummary, limit int) []SimpleDay {
+	if limit < 1 {
+		return []SimpleDay{}
+	}
+	limit = min(limit, len(input))
 	days := make([]SimpleDay, 0, limit)
 	for i := 0; i < limit; i++ {
-		d := f.Days[i]
+		d := input[i]
 		condition := simpleCondition(d)
 		days = append(days, SimpleDay{
 			Date:          d.Date,
@@ -154,6 +170,17 @@ func toSimpleDays(f *RiskForecast) []SimpleDay {
 		})
 	}
 	return days
+}
+
+type WindowForecastResponse struct {
+	StartDate     string      `json:"start_date"`
+	DaysRequested int         `json:"days_requested"`
+	Mode          string      `json:"mode"`
+	Confidence    string      `json:"confidence"`
+	Basis         string      `json:"basis"`
+	Timezone      string      `json:"timezone"`
+	Sources       []string    `json:"sources"`
+	Days          []SimpleDay `json:"days"`
 }
 
 func simpleCondition(d DailyRiskSummary) string {
@@ -245,6 +272,206 @@ func round1(v float64) float64 {
 	return math.Round(v*10) / 10
 }
 
+func parseStartDate(r *http.Request) (time.Time, error) {
+	startRaw := r.URL.Query().Get("start_date")
+	if startRaw == "" {
+		return time.Time{}, fmt.Errorf("start_date query param required (YYYY-MM-DD)")
+	}
+	startDate, err := time.Parse("2006-01-02", startRaw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid start_date, expected YYYY-MM-DD")
+	}
+	return startDate, nil
+}
+
+func parseDays(r *http.Request) (int, error) {
+	daysRaw := strings.TrimSpace(r.URL.Query().Get("days"))
+	if daysRaw == "" {
+		return 10, nil
+	}
+	days, err := strconv.Atoi(daysRaw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid days")
+	}
+	if days < 1 || days > 10 {
+		return 0, fmt.Errorf("days must be between 1 and 10")
+	}
+	return days, nil
+}
+
+func toDateOnly(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+func inLiveWindow(today, startDate time.Time, days int) bool {
+	endDate := startDate.AddDate(0, 0, days-1)
+	liveEnd := today.AddDate(0, 0, liveMaxDays-1)
+	return !startDate.Before(today) && !endDate.After(liveEnd)
+}
+
+func extractWindow(days []DailyRiskSummary, startDate time.Time, count int) []DailyRiskSummary {
+	startRaw := startDate.Format("2006-01-02")
+	startIdx := -1
+	for i, d := range days {
+		if d.Date == startRaw {
+			startIdx = i
+			break
+		}
+	}
+	if startIdx == -1 {
+		return nil
+	}
+	endIdx := startIdx + count
+	if endIdx > len(days) {
+		return nil
+	}
+	return days[startIdx:endIdx]
+}
+
+func climateTempMean(lat float64, month time.Month) float64 {
+	absLat := math.Abs(lat)
+	zoneBase := 28.0 - 0.45*absLat
+	if zoneBase < -12 {
+		zoneBase = -12
+	}
+
+	seasonPhase := 2 * math.Pi * (float64(month) - 7.0) / 12.0
+	seasonAmp := 4.0 + absLat*0.16
+	season := seasonAmp * math.Cos(seasonPhase)
+	if lat < 0 {
+		season = -season
+	}
+	return zoneBase + season
+}
+
+func generateLongRangeDays(lat, lon float64, startDate time.Time, days int) []SimpleDay {
+	out := make([]SimpleDay, 0, days)
+	for i := 0; i < days; i++ {
+		d := startDate.AddDate(0, 0, i)
+		mean := climateTempMean(lat, d.Month())
+		absLat := math.Abs(lat)
+		spread := 4.0 + absLat*0.06
+		dailyWave := math.Sin(float64(d.YearDay())*0.31 + lat*0.03 + lon*0.02)
+
+		tempMin := mean - spread + dailyWave*1.1
+		tempMax := mean + spread + dailyWave*1.3
+
+		precip := math.Max(0, 1.2+2.2*math.Abs(math.Sin(float64(d.Month())*0.55))+dailyWave*1.5)
+		wind := math.Max(6, 16+absLat*0.12+dailyWave*4)
+		gust := wind * 1.45
+		visibility := math.Max(4, 11-precip*0.7)
+		snow := 0.0
+		condition := "partly_cloudy"
+		summary := "Seasonal outlook"
+		risk := "low"
+
+		switch {
+		case tempMax <= 1 && precip >= 2:
+			snow = precip * 0.9
+			condition = "snow"
+			summary = "Snow possible (climatology)"
+			risk = "moderate"
+		case precip >= 5:
+			condition = "rain"
+			summary = "Rain possible (climatology)"
+			risk = "moderate"
+		case gust >= 55:
+			condition = "windy"
+			summary = "Windy spell possible"
+			risk = "moderate"
+		case precip < 1:
+			condition = "clear"
+			summary = "Mostly dry pattern"
+		}
+
+		out = append(out, SimpleDay{
+			Date:          d.Format("2006-01-02"),
+			Summary:       summary,
+			Condition:     condition,
+			Risk:          risk,
+			Confidence:    "low",
+			TempMinC:      round1(tempMin),
+			TempMaxC:      round1(tempMax),
+			PrecipMm:      round1(precip),
+			SnowCm:        round1(snow),
+			WindMaxKmh:    round1(wind),
+			GustMaxKmh:    round1(gust),
+			WindDirection: int(math.Mod(math.Mod(200+float64(i)*19+lon*0.4, 360)+360, 360)),
+			VisibilityKm:  round1(visibility),
+		})
+	}
+	return out
+}
+
+func handleWindowForecast(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("lat") == "" || r.URL.Query().Get("lon") == "" {
+		writeJSONError(w, http.StatusBadRequest, "lat and lon query params required")
+		return
+	}
+	lat, lon, err := parsLatLon(r)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	startDate, err := parseStartDate(r)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	days, err := parseDays(r)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	startDate = toDateOnly(startDate)
+	today := toDateOnly(time.Now().UTC())
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if inLiveWindow(today, startDate, days) {
+		forecast, fetchErr := getForecastForDays(lat, lon, liveMaxDays)
+		if fetchErr != nil {
+			log.Printf("getForecastForDays error path=%s lat=%.5f lon=%.5f err=%v", r.URL.Path, lat, lon, fetchErr)
+			writeJSONError(w, http.StatusBadGateway, "forecast upstream failed")
+			return
+		}
+		window := extractWindow(forecast.Days, startDate, days)
+		if len(window) != days {
+			writeJSONError(w, http.StatusBadGateway, "forecast window unavailable from upstream")
+			return
+		}
+		resp := WindowForecastResponse{
+			StartDate:     startDate.Format("2006-01-02"),
+			DaysRequested: days,
+			Mode:          "live_forecast",
+			Confidence:    "high",
+			Basis:         "open-meteo numerical weather prediction",
+			Timezone:      forecast.Timezone,
+			Sources:       forecast.Sources,
+			Days:          toSimpleDaysFromSlice(window, days),
+		}
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			log.Printf("response encode error path=%s lat=%.5f lon=%.5f err=%v", r.URL.Path, lat, lon, err)
+		}
+		return
+	}
+
+	resp := WindowForecastResponse{
+		StartDate:     startDate.Format("2006-01-02"),
+		DaysRequested: days,
+		Mode:          "long_range_outlook",
+		Confidence:    "low",
+		Basis:         "climatology-style synthetic baseline (placeholder)",
+		Timezone:      "UTC",
+		Sources:       []string{"internal_placeholder_normals_v1"},
+		Days:          generateLongRangeDays(lat, lon, startDate, days),
+	}
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("response encode error path=%s lat=%.5f lon=%.5f err=%v", r.URL.Path, lat, lon, err)
+	}
+}
+
 // ── HTTP handlers ─────────────────────────────────────────────────────────────
 
 func handleForecast(w http.ResponseWriter, r *http.Request) {
@@ -331,6 +558,7 @@ func withRecovery(name string, next http.HandlerFunc) http.HandlerFunc {
 func main() {
 	http.HandleFunc("/forecast", withRecovery("forecast", handleForecast))
 	http.HandleFunc("/forecast/simple", withRecovery("forecast_simple", handleSimpleForecast))
+	http.HandleFunc("/forecast/window", withRecovery("forecast_window", handleWindowForecast))
 	http.HandleFunc("/health", withRecovery("health", handleHealth))
 
 	port := os.Getenv("PORT")
@@ -340,6 +568,7 @@ func main() {
 	addr := ":" + port
 	log.Printf("weather-risk-api listening on %s", addr)
 	log.Printf("Usage: GET /forecast?lat=41.33&lon=19.82")
+	log.Printf("Usage: GET /forecast/window?lat=41.33&lon=19.82&start_date=2026-04-01&days=10")
 	if err := http.ListenAndServe(addr, nil); err != nil {
 		log.Fatal(err)
 	}
