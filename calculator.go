@@ -1085,27 +1085,20 @@ func toHourlySeries(r *OpenMeteoResponse) *hourlySeries {
 	if len(h.Time) == 0 {
 		return nil
 	}
-	// Require the key fields
-	required := []interface{}{
+	// Surface fields are required.
+	surfaceRequired := [][]*float64{
 		h.Temperature2m, h.WindSpeed10m, h.WindGusts10m, h.WindDirection10m,
-		h.Precipitation, h.Rain, h.Snowfall, h.PrecipitationType, h.Visibility,
+		h.Precipitation, h.Rain, h.Snowfall, h.Visibility,
 		h.CloudCoverLow, h.CloudCoverMid, h.CloudCoverHigh,
-		h.Temperature850hPa, h.Temperature700hPa, h.Temperature500hPa,
-		h.GeopotentialHeight850hPa, h.GeopotentialHeight700hPa, h.GeopotentialHeight500hPa,
-		h.WindSpeed850hPa, h.WindSpeed700hPa, h.WindSpeed500hPa,
-		h.WindDirection850hPa, h.WindDirection700hPa, h.WindDirection500hPa,
 	}
 	size := len(h.Time)
-	for _, list := range required {
-		switch v := list.(type) {
-		case []*float64:
-			if v == nil {
-				return nil
-			}
-			if len(v) < size {
-				size = len(v)
-			}
-}
+	for _, v := range surfaceRequired {
+		if v == nil {
+			return nil
+		}
+		if len(v) < size {
+			size = len(v)
+		}
 	}
 	if size == 0 {
 		return nil
