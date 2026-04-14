@@ -18,6 +18,7 @@ import (
 
 const (
 	cacheTTL      = 10 * time.Minute
+	staleCacheTTL = 6 * time.Hour
 	cacheRadiusKm = 1.0
 	earthRadiusKm = 6371.0
 	liveMaxDays   = 16
@@ -32,6 +33,17 @@ type cacheEntry struct {
 var (
 	cacheMu sync.RWMutex
 	entries []*cacheEntry
+
+	fetchAllFn          = FetchAll
+	buildRiskForecastFn = BuildRiskForecast
+)
+
+type cacheStatus string
+
+const (
+	cacheMiss  cacheStatus = "MISS"
+	cacheHit   cacheStatus = "HIT"
+	cacheStale cacheStatus = "STALE"
 )
 
 // haversineKm returns the great-circle distance in kilometres between two points.
@@ -46,28 +58,42 @@ func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
 }
 
 func cacheGet(lat, lon float64) *RiskForecast {
+	forecast, _ := cacheGetWithin(lat, lon, cacheTTL)
+	return forecast
+}
+
+func cacheGetWithin(lat, lon float64, maxAge time.Duration) (*RiskForecast, time.Duration) {
 	cacheMu.RLock()
 	defer cacheMu.RUnlock()
+	var best *cacheEntry
+	bestAge := maxAge + time.Second
 	for _, e := range entries {
-		if time.Since(e.timestamp) > cacheTTL {
+		age := time.Since(e.timestamp)
+		if age > maxAge {
 			continue
 		}
 		if haversineKm(lat, lon, e.lat, e.lon) <= cacheRadiusKm {
-			return e.forecast
+			if best == nil || age < bestAge {
+				best = e
+				bestAge = age
+			}
 		}
 	}
-	return nil
+	if best == nil {
+		return nil, 0
+	}
+	return best.forecast, bestAge
 }
 
 func cachePut(lat, lon float64, f *RiskForecast) {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
-	// Evict expired entries and overwrite an existing nearby entry if present.
+	// Retain entries long enough to serve bounded stale responses on upstream failure.
 	now := time.Now()
 	fresh := entries[:0]
 	replaced := false
 	for _, e := range entries {
-		if time.Since(e.timestamp) > cacheTTL {
+		if time.Since(e.timestamp) > staleCacheTTL {
 			continue // drop expired
 		}
 		if !replaced && haversineKm(lat, lon, e.lat, e.lon) <= cacheRadiusKm {
@@ -98,28 +124,32 @@ func parsLatLon(r *http.Request) (float64, float64, error) {
 	return lat, lon, nil
 }
 
-func getForecast(lat, lon float64) (*RiskForecast, bool, error) {
+func getForecast(lat, lon float64) (*RiskForecast, cacheStatus, error) {
 	if cached := cacheGet(lat, lon); cached != nil {
-		return cached, true, nil
+		return cached, cacheHit, nil
 	}
-	ecmwf, spreads, sources, err := FetchAll(lat, lon, 10)
+	ecmwf, spreads, sources, err := fetchAllFn(lat, lon, 10)
 	if err != nil {
-		return nil, false, err
+		if stale, age := cacheGetWithin(lat, lon, staleCacheTTL); stale != nil {
+			log.Printf("serving stale forecast lat=%.5f lon=%.5f age=%s err=%v", lat, lon, age.Round(time.Second), err)
+			return stale, cacheStale, nil
+		}
+		return nil, cacheMiss, err
 	}
-	forecast, err := BuildRiskForecast(ecmwf, spreads, sources)
+	forecast, err := buildRiskForecastFn(ecmwf, spreads, sources)
 	if err != nil {
-		return nil, false, err
+		return nil, cacheMiss, err
 	}
 	cachePut(lat, lon, forecast)
-	return forecast, false, nil
+	return forecast, cacheMiss, nil
 }
 
 func getForecastForDays(lat, lon float64, forecastDays int) (*RiskForecast, error) {
-	ecmwf, spreads, sources, err := FetchAll(lat, lon, forecastDays)
+	ecmwf, spreads, sources, err := fetchAllFn(lat, lon, forecastDays)
 	if err != nil {
 		return nil, err
 	}
-	return BuildRiskForecast(ecmwf, spreads, sources)
+	return buildRiskForecastFn(ecmwf, spreads, sources)
 }
 
 // ── Simple forecast response ──────────────────────────────────────────────────
@@ -511,18 +541,14 @@ func handleForecast(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	forecast, hit, err := getForecast(lat, lon)
+	forecast, status, err := getForecast(lat, lon)
 	if err != nil {
 		log.Printf("getForecast error path=%s lat=%.5f lon=%.5f err=%v", r.URL.Path, lat, lon, err)
 		writeJSONError(w, http.StatusBadGateway, "forecast upstream failed")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if hit {
-		w.Header().Set("X-Cache", "HIT")
-	} else {
-		w.Header().Set("X-Cache", "MISS")
-	}
+	w.Header().Set("X-Cache", string(status))
 	if err := json.NewEncoder(w).Encode(forecast); err != nil {
 		log.Printf("response encode error path=%s lat=%.5f lon=%.5f err=%v", r.URL.Path, lat, lon, err)
 	}
@@ -538,18 +564,14 @@ func handleSimpleForecast(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	forecast, hit, err := getForecast(lat, lon)
+	forecast, status, err := getForecast(lat, lon)
 	if err != nil {
 		log.Printf("getForecast error path=%s lat=%.5f lon=%.5f err=%v", r.URL.Path, lat, lon, err)
 		writeJSONError(w, http.StatusBadGateway, "forecast upstream failed")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	if hit {
-		w.Header().Set("X-Cache", "HIT")
-	} else {
-		w.Header().Set("X-Cache", "MISS")
-	}
+	w.Header().Set("X-Cache", string(status))
 
 	resp := buildLiveWindowResponse(forecast, "", 10, forecast.Days)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {

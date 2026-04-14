@@ -1,9 +1,20 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"testing"
+	"time"
 )
+
+func resetForecastTestState(t *testing.T) {
+	t.Helper()
+	cacheMu.Lock()
+	entries = nil
+	cacheMu.Unlock()
+	fetchAllFn = FetchAll
+	buildRiskForecastFn = BuildRiskForecast
+}
 
 func TestToSimpleCapsAtTenDaysAndFormatsValues(t *testing.T) {
 	days := make([]DailyRiskSummary, 0, 11)
@@ -177,5 +188,58 @@ func TestBuildLiveWindowResponseUsesEnvelopeShape(t *testing.T) {
 	}
 	if len(resp.Sources) != 2 || resp.Sources[0] != "ecmwf" {
 		t.Fatalf("unexpected sources: %+v", resp.Sources)
+	}
+}
+
+func TestGetForecastReturnsFreshCacheHit(t *testing.T) {
+	resetForecastTestState(t)
+
+	cached := &RiskForecast{Timezone: "UTC", Sources: []string{"cache"}}
+	cachePut(42.40347, 19.76763, cached)
+
+	fetchCalled := false
+	fetchAllFn = func(lat, lon float64, forecastDays int) (*OpenMeteoResponse, []*OpenMeteoResponse, []string, error) {
+		fetchCalled = true
+		return nil, nil, nil, errors.New("unexpected fetch")
+	}
+
+	got, status, err := getForecast(42.40347, 19.76763)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != cacheHit {
+		t.Fatalf("expected cache hit, got %q", status)
+	}
+	if got != cached {
+		t.Fatalf("expected cached forecast pointer")
+	}
+	if fetchCalled {
+		t.Fatalf("expected no upstream fetch on cache hit")
+	}
+}
+
+func TestGetForecastServesStaleCacheOnUpstreamError(t *testing.T) {
+	resetForecastTestState(t)
+
+	stale := &RiskForecast{Timezone: "UTC", Sources: []string{"stale-cache"}}
+	cachePut(42.40347, 19.76763, stale)
+
+	cacheMu.Lock()
+	entries[0].timestamp = time.Now().Add(-cacheTTL - time.Minute)
+	cacheMu.Unlock()
+
+	fetchAllFn = func(lat, lon float64, forecastDays int) (*OpenMeteoResponse, []*OpenMeteoResponse, []string, error) {
+		return nil, nil, nil, errors.New(`forecast fetch failed: HTTP 429 from /v1/forecast body="{\"reason\":\"Daily API request limit exceeded. Please try again tomorrow.\",\"error\":true}"`)
+	}
+
+	got, status, err := getForecast(42.40347, 19.76763)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status != cacheStale {
+		t.Fatalf("expected stale cache status, got %q", status)
+	}
+	if got != stale {
+		t.Fatalf("expected stale forecast pointer")
 	}
 }
