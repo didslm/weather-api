@@ -1177,7 +1177,7 @@ func maxSlice(s []float64) float64 {
 
 func minSlice(s []float64) float64 {
 	if len(s) == 0 {
-		return math.MaxFloat64
+		return 0
 	}
 	m := s[0]
 	for _, v := range s[1:] {
@@ -1307,16 +1307,3 @@ func orEmpty[T any](s []T) []T {
 	return s
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}

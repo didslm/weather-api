@@ -90,7 +90,7 @@ func cachePut(lat, lon float64, f *RiskForecast) {
 	defer cacheMu.Unlock()
 	// Retain entries long enough to serve bounded stale responses on upstream failure.
 	now := time.Now()
-	fresh := entries[:0]
+	fresh := make([]*cacheEntry, 0, len(entries))
 	replaced := false
 	for _, e := range entries {
 		if time.Since(e.timestamp) > staleCacheTTL {
@@ -120,6 +120,12 @@ func parsLatLon(r *http.Request) (float64, float64, error) {
 	lon, err := strconv.ParseFloat(r.URL.Query().Get("lon"), 64)
 	if err != nil {
 		return 0, 0, fmt.Errorf("invalid lon")
+	}
+	if lat < -90 || lat > 90 {
+		return 0, 0, fmt.Errorf("lat must be between -90 and 90")
+	}
+	if lon < -180 || lon > 180 {
+		return 0, 0, fmt.Errorf("lon must be between -180 and 180")
 	}
 	return lat, lon, nil
 }

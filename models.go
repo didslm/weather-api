@@ -11,7 +11,11 @@ const (
 )
 
 func (r RiskLevel) String() string {
-	return [...]string{"LOW", "MODERATE", "HIGH"}[r]
+	names := [...]string{"LOW", "MODERATE", "HIGH"}
+	if int(r) < 0 || int(r) >= len(names) {
+		return "UNKNOWN"
+	}
+	return names[r]
 }
 
 func (r RiskLevel) MarshalJSON() ([]byte, error) {
