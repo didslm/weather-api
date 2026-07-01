@@ -1,3 +1,6 @@
 # Forecast verification log (append-only, generated at runtime)
 forecast_log.jsonl
 *.jsonl
+
+# Compiled binary (build artifact)
+/weather-risk-api
