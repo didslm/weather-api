@@ -195,7 +195,7 @@ func TestGetForecastReturnsFreshCacheHit(t *testing.T) {
 	resetForecastTestState(t)
 
 	cached := &RiskForecast{Timezone: "UTC", Sources: []string{"cache"}}
-	cachePut(42.40347, 19.76763, cached)
+	cachePut(42.40347, 19.76763, noElevationKey, cached)
 
 	fetchCalled := false
 	fetchAllFn = func(lat, lon float64, forecastDays int) (*OpenMeteoResponse, []*OpenMeteoResponse, []string, error) {
@@ -203,7 +203,7 @@ func TestGetForecastReturnsFreshCacheHit(t *testing.T) {
 		return nil, nil, nil, errors.New("unexpected fetch")
 	}
 
-	got, status, err := getForecast(42.40347, 19.76763)
+	got, status, err := getForecast(42.40347, 19.76763, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestGetForecastServesStaleCacheOnUpstreamError(t *testing.T) {
 	resetForecastTestState(t)
 
 	stale := &RiskForecast{Timezone: "UTC", Sources: []string{"stale-cache"}}
-	cachePut(42.40347, 19.76763, stale)
+	cachePut(42.40347, 19.76763, noElevationKey, stale)
 
 	cacheMu.Lock()
 	entries[0].timestamp = time.Now().Add(-cacheTTL - time.Minute)
@@ -232,7 +232,7 @@ func TestGetForecastServesStaleCacheOnUpstreamError(t *testing.T) {
 		return nil, nil, nil, errors.New(`forecast fetch failed: HTTP 429 from /v1/forecast body="{\"reason\":\"Daily API request limit exceeded. Please try again tomorrow.\",\"error\":true}"`)
 	}
 
-	got, status, err := getForecast(42.40347, 19.76763)
+	got, status, err := getForecast(42.40347, 19.76763, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

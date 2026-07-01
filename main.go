@@ -17,17 +17,32 @@ import (
 // ── Spatial in-memory cache (1 km radius) ────────────────────────────────────
 
 const (
-	cacheTTL      = 10 * time.Minute
-	staleCacheTTL = 6 * time.Hour
-	cacheRadiusKm = 1.0
-	earthRadiusKm = 6371.0
-	liveMaxDays   = 16
+	cacheTTL         = 10 * time.Minute
+	staleCacheTTL    = 6 * time.Hour
+	cacheRadiusKm    = 1.0
+	earthRadiusKm    = 6371.0
+	liveMaxDays      = 16
+	elevCacheBucketM = 25.0 // target elevations within this bucket share a cache entry
 )
+
+// noElevationKey marks a forecast built with no elevation downscaling; such
+// entries only ever match other no-elevation requests.
+const noElevationKey = math.MinInt64
 
 type cacheEntry struct {
 	lat, lon  float64
+	elevKey   int64
 	forecast  *RiskForecast
 	timestamp time.Time
+}
+
+// elevCacheKey buckets a target elevation so nearby elevations share cache entries;
+// nil (no downscaling requested) maps to noElevationKey.
+func elevCacheKey(elevation *float64) int64 {
+	if elevation == nil {
+		return noElevationKey
+	}
+	return int64(math.Round(*elevation/elevCacheBucketM) * elevCacheBucketM)
 }
 
 var (
@@ -57,12 +72,12 @@ func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
 	return earthRadiusKm * 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 }
 
-func cacheGet(lat, lon float64) *RiskForecast {
-	forecast, _ := cacheGetWithin(lat, lon, cacheTTL)
+func cacheGet(lat, lon float64, elevKey int64) *RiskForecast {
+	forecast, _ := cacheGetWithin(lat, lon, elevKey, cacheTTL)
 	return forecast
 }
 
-func cacheGetWithin(lat, lon float64, maxAge time.Duration) (*RiskForecast, time.Duration) {
+func cacheGetWithin(lat, lon float64, elevKey int64, maxAge time.Duration) (*RiskForecast, time.Duration) {
 	cacheMu.RLock()
 	defer cacheMu.RUnlock()
 	var best *cacheEntry
@@ -70,6 +85,9 @@ func cacheGetWithin(lat, lon float64, maxAge time.Duration) (*RiskForecast, time
 	for _, e := range entries {
 		age := time.Since(e.timestamp)
 		if age > maxAge {
+			continue
+		}
+		if e.elevKey != elevKey {
 			continue
 		}
 		if haversineKm(lat, lon, e.lat, e.lon) <= cacheRadiusKm {
@@ -85,7 +103,7 @@ func cacheGetWithin(lat, lon float64, maxAge time.Duration) (*RiskForecast, time
 	return best.forecast, bestAge
 }
 
-func cachePut(lat, lon float64, f *RiskForecast) {
+func cachePut(lat, lon float64, elevKey int64, f *RiskForecast) {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
 	// Retain entries long enough to serve bounded stale responses on upstream failure.
@@ -96,7 +114,7 @@ func cachePut(lat, lon float64, f *RiskForecast) {
 		if time.Since(e.timestamp) > staleCacheTTL {
 			continue // drop expired
 		}
-		if !replaced && haversineKm(lat, lon, e.lat, e.lon) <= cacheRadiusKm {
+		if !replaced && e.elevKey == elevKey && haversineKm(lat, lon, e.lat, e.lon) <= cacheRadiusKm {
 			e.lat, e.lon = lat, lon
 			e.forecast = f
 			e.timestamp = now
@@ -106,7 +124,7 @@ func cachePut(lat, lon float64, f *RiskForecast) {
 	}
 	entries = fresh
 	if !replaced {
-		entries = append(entries, &cacheEntry{lat: lat, lon: lon, forecast: f, timestamp: now})
+		entries = append(entries, &cacheEntry{lat: lat, lon: lon, elevKey: elevKey, forecast: f, timestamp: now})
 	}
 }
 
@@ -130,32 +148,34 @@ func parsLatLon(r *http.Request) (float64, float64, error) {
 	return lat, lon, nil
 }
 
-func getForecast(lat, lon float64) (*RiskForecast, cacheStatus, error) {
-	if cached := cacheGet(lat, lon); cached != nil {
+func getForecast(lat, lon float64, elevation *float64) (*RiskForecast, cacheStatus, error) {
+	elevKey := elevCacheKey(elevation)
+	if cached := cacheGet(lat, lon, elevKey); cached != nil {
 		return cached, cacheHit, nil
 	}
 	ecmwf, spreads, sources, err := fetchAllFn(lat, lon, 10)
 	if err != nil {
-		if stale, age := cacheGetWithin(lat, lon, staleCacheTTL); stale != nil {
+		if stale, age := cacheGetWithin(lat, lon, elevKey, staleCacheTTL); stale != nil {
 			log.Printf("serving stale forecast lat=%.5f lon=%.5f age=%s err=%v", lat, lon, age.Round(time.Second), err)
 			return stale, cacheStale, nil
 		}
 		return nil, cacheMiss, err
 	}
-	forecast, err := buildRiskForecastFn(ecmwf, spreads, sources)
+	forecast, err := buildRiskForecastFn(ecmwf, spreads, sources, elevation)
 	if err != nil {
 		return nil, cacheMiss, err
 	}
-	cachePut(lat, lon, forecast)
+	cachePut(lat, lon, elevKey, forecast)
+	logForecastSnapshot(lat, lon, forecast)
 	return forecast, cacheMiss, nil
 }
 
-func getForecastForDays(lat, lon float64, forecastDays int) (*RiskForecast, error) {
+func getForecastForDays(lat, lon float64, forecastDays int, elevation *float64) (*RiskForecast, error) {
 	ecmwf, spreads, sources, err := fetchAllFn(lat, lon, forecastDays)
 	if err != nil {
 		return nil, err
 	}
-	return buildRiskForecastFn(ecmwf, spreads, sources)
+	return buildRiskForecastFn(ecmwf, spreads, sources, elevation)
 }
 
 // ── Simple forecast response ──────────────────────────────────────────────────
@@ -371,6 +391,26 @@ func parseDays(r *http.Request) (int, error) {
 	return days, nil
 }
 
+// parseElevation reads an optional target elevation (metres) from `elevation` or
+// its `alt` alias. Absent param ⇒ nil (no downscaling), not an error.
+func parseElevation(r *http.Request) (*float64, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get("elevation"))
+	if raw == "" {
+		raw = strings.TrimSpace(r.URL.Query().Get("alt"))
+	}
+	if raw == "" {
+		return nil, nil
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid elevation")
+	}
+	if v < -500 || v > 9000 {
+		return nil, fmt.Errorf("elevation must be between -500 and 9000 m")
+	}
+	return &v, nil
+}
+
 func toDateOnly(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
 }
@@ -495,6 +535,11 @@ func handleWindowForecast(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	elevation, err := parseElevation(r)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	startDate = toDateOnly(startDate)
 	today := toDateOnly(time.Now().UTC())
@@ -502,7 +547,7 @@ func handleWindowForecast(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	if inLiveWindow(today, startDate, days) {
-		forecast, fetchErr := getForecastForDays(lat, lon, liveMaxDays)
+		forecast, fetchErr := getForecastForDays(lat, lon, liveMaxDays, elevation)
 		if fetchErr != nil {
 			log.Printf("getForecastForDays error path=%s lat=%.5f lon=%.5f err=%v", r.URL.Path, lat, lon, fetchErr)
 			writeJSONError(w, http.StatusBadGateway, "forecast upstream failed")
@@ -547,7 +592,12 @@ func handleForecast(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	forecast, status, err := getForecast(lat, lon)
+	elevation, err := parseElevation(r)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	forecast, status, err := getForecast(lat, lon, elevation)
 	if err != nil {
 		log.Printf("getForecast error path=%s lat=%.5f lon=%.5f err=%v", r.URL.Path, lat, lon, err)
 		writeJSONError(w, http.StatusBadGateway, "forecast upstream failed")
@@ -570,7 +620,12 @@ func handleSimpleForecast(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	forecast, status, err := getForecast(lat, lon)
+	elevation, err := parseElevation(r)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	forecast, status, err := getForecast(lat, lon, elevation)
 	if err != nil {
 		log.Printf("getForecast error path=%s lat=%.5f lon=%.5f err=%v", r.URL.Path, lat, lon, err)
 		writeJSONError(w, http.StatusBadGateway, "forecast upstream failed")

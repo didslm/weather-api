@@ -67,6 +67,7 @@ func BuildRiskForecast(
 	ecmwfResp *OpenMeteoResponse,
 	spreadResps []*OpenMeteoResponse,
 	sources []string,
+	targetElevation *float64,
 ) (*RiskForecast, error) {
 	ecmwf := toHourlySeries(ecmwfResp)
 	if ecmwf == nil {
@@ -80,7 +81,23 @@ func BuildRiskForecast(
 		}
 	}
 
-	brief := buildGuideBrief(ecmwf, spreads)
+	// Confidence must be measured from the raw per-model disagreement, so compute
+	// it before the models are blended into a consensus.
+	conf := confidenceInfo(ecmwf, spreads, min(24, len(ecmwf.time)))
+
+	// Multi-model blending: replace surface temp/wind/precip with the per-timestamp
+	// median across all models, so no single model's outlier run drives a signal.
+	blendSeries(ecmwf, spreads)
+
+	// Terrain downscaling (optional): correct the (now blended) consensus to the
+	// caller's target elevation before any risk computation, so every downstream
+	// signal uses corrected values.
+	var elevation *ElevationAdjustment
+	if targetElevation != nil && ecmwfResp != nil {
+		elevation = downscaleSeries(ecmwf, ecmwfResp.Elevation, *targetElevation)
+	}
+
+	brief := buildGuideBrief(ecmwf, conf)
 	snapshot := buildSnapshot(ecmwf)
 	days := buildDailySummaries(ecmwf)
 
@@ -90,17 +107,18 @@ func BuildRiskForecast(
 	}
 
 	return &RiskForecast{
-		Timezone: tz,
-		Sources:  sources,
-		Brief:    brief,
-		Snapshot: snapshot,
-		Days:     days,
+		Timezone:  tz,
+		Sources:   sources,
+		Elevation: elevation,
+		Brief:     brief,
+		Snapshot:  snapshot,
+		Days:      days,
 	}, nil
 }
 
 // ── Guide brief ───────────────────────────────────────────────────────────────
 
-func buildGuideBrief(s *hourlySeries, spreads []*spreadSeries) GuideBrief {
+func buildGuideBrief(s *hourlySeries, conf confidence) GuideBrief {
 	horizon := min(24, len(s.time))
 
 	maxRidgeWind := maxSlice(s.wind700[:horizon])
@@ -140,18 +158,16 @@ func buildGuideBrief(s *hourlySeries, spreads []*spreadSeries) GuideBrief {
 		}
 	}
 
-	confidence := confidenceInfo(s, spreads, horizon)
-
 	return GuideBrief{
-		TopSignals: buildTopSignals(maxRidgeWind, maxGust, totalPrecip, maxPrecipRate, minWindChill, tempMin, confidence.level),
-		ConfidenceDetail: confidence.detail,
-		DominantRisk:    dominant,
-		SecondaryRisks:  orEmpty(secondary),
-		TimingNotes:     timingNotes(s, horizon),
-		ThresholdNotes:  thresholdNotes(dominant),
-		Implications:    implications(dominant),
-		RiskDrivers:     riskDrivers(s, horizon),
-		KeyRisks:        buildKeyRisks(s, horizon, windLevel, precipLevel, visLevel, thunderLevel, freezeLevel, thermalLevel, dominant),
+		TopSignals:       buildTopSignals(maxRidgeWind, maxGust, totalPrecip, maxPrecipRate, minWindChill, tempMin, conf.level),
+		ConfidenceDetail: conf.detail,
+		DominantRisk:     dominant,
+		SecondaryRisks:   orEmpty(secondary),
+		TimingNotes:      timingNotes(s, horizon),
+		ThresholdNotes:   thresholdNotes(dominant),
+		Implications:     implications(dominant),
+		RiskDrivers:      riskDrivers(s, horizon),
+		KeyRisks:         buildKeyRisks(s, horizon, windLevel, precipLevel, visLevel, thunderLevel, freezeLevel, thermalLevel, dominant),
 	}
 }
 
@@ -1306,4 +1322,3 @@ func orEmpty[T any](s []T) []T {
 	}
 	return s
 }
-

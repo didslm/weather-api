@@ -37,9 +37,9 @@ const (
 type WindSignal string
 
 const (
-	WindCalm      WindSignal = "CALM"
-	WindBreezy    WindSignal = "BREEZY"
-	WindStrong    WindSignal = "STRONG"
+	WindCalm       WindSignal = "CALM"
+	WindBreezy     WindSignal = "BREEZY"
+	WindStrong     WindSignal = "STRONG"
 	WindVeryStrong WindSignal = "VERY_STRONG"
 )
 
@@ -55,9 +55,9 @@ const (
 type RainSignal string
 
 const (
-	RainDry      RainSignal = "DRY"
-	RainLight    RainSignal = "LIGHT"
-	RainLikely   RainSignal = "RAIN_LIKELY"
+	RainDry    RainSignal = "DRY"
+	RainLight  RainSignal = "LIGHT"
+	RainLikely RainSignal = "RAIN_LIKELY"
 )
 
 type ConfidenceLevel string
@@ -92,13 +92,13 @@ const (
 type RiskKeyType string
 
 const (
-	KeyRidgeWind    RiskKeyType = "RIDGE_WIND"
-	KeyGusts        RiskKeyType = "GUSTS"
-	KeyPrecip       RiskKeyType = "PRECIP"
+	KeyRidgeWind     RiskKeyType = "RIDGE_WIND"
+	KeyGusts         RiskKeyType = "GUSTS"
+	KeyPrecip        RiskKeyType = "PRECIP"
 	KeyFreezingLevel RiskKeyType = "FREEZING_LEVEL"
-	KeyVisibility   RiskKeyType = "VISIBILITY"
-	KeyThunder      RiskKeyType = "THUNDER"
-	KeyThermal      RiskKeyType = "THERMAL"
+	KeyVisibility    RiskKeyType = "VISIBILITY"
+	KeyThunder       RiskKeyType = "THUNDER"
+	KeyThermal       RiskKeyType = "THERMAL"
 )
 
 // ── Output models ─────────────────────────────────────────────────────────────
@@ -123,44 +123,44 @@ type RiskKey struct {
 }
 
 type GuideBrief struct {
-	TopSignals      TopSignals      `json:"top_signals"`
+	TopSignals       TopSignals     `json:"top_signals"`
 	ConfidenceDetail string         `json:"confidence_detail"`
-	DominantRisk    RiskCategory    `json:"dominant_risk"`
-	SecondaryRisks  []RiskCategory  `json:"secondary_risks"`
-	TimingNotes     []string        `json:"timing_notes"`
-	ThresholdNotes  []string        `json:"threshold_notes"`
-	Implications    []string        `json:"implications"`
-	RiskDrivers     []RiskDriver    `json:"risk_drivers"`
-	KeyRisks        []RiskKey       `json:"key_risks"`
+	DominantRisk     RiskCategory   `json:"dominant_risk"`
+	SecondaryRisks   []RiskCategory `json:"secondary_risks"`
+	TimingNotes      []string       `json:"timing_notes"`
+	ThresholdNotes   []string       `json:"threshold_notes"`
+	Implications     []string       `json:"implications"`
+	RiskDrivers      []RiskDriver   `json:"risk_drivers"`
+	KeyRisks         []RiskKey      `json:"key_risks"`
 }
 
 type RiskSnapshot struct {
-	WindSurfaceMax  float64  `json:"wind_surface_max"`
-	WindGustMax     float64  `json:"wind_gust_max"`
-	Ridge1500Max    float64  `json:"ridge_1500_max"`
-	Ridge3000Max    float64  `json:"ridge_3000_max"`
-	Ridge5600Max    float64  `json:"ridge_5600_max"`
-	PrecipTotal     float64  `json:"precip_total"`
-	PrecipStart     *string  `json:"precip_start"`
-	PrecipEnd       *string  `json:"precip_end"`
-	PrecipPeak      *string  `json:"precip_peak"`
-	PrecipType      string   `json:"precip_type"`
-	FreezingLevelMin *int    `json:"freezing_level_min"`
-	FreezingTrend   int      `json:"freezing_trend"`
-	FreezingBelow1500 bool   `json:"freezing_below_1500"`
-	FreezingAbove5600 bool   `json:"freezing_above_5600"`
-	CloudLowMax     float64  `json:"cloud_low_max"`
-	CloudMidMax     float64  `json:"cloud_mid_max"`
-	CloudHighMax    float64  `json:"cloud_high_max"`
-	CloudDescriptor string   `json:"cloud_descriptor"`
-	VisibilityMin   float64  `json:"visibility_min"`
-	TempMin         float64  `json:"temp_min"`
-	TempMax         float64  `json:"temp_max"`
-	WindChillMin    *float64 `json:"wind_chill_min"`
-	SnowTotal       float64  `json:"snow_total"`
-	WindLoading     bool     `json:"wind_loading"`
-	CapeMax         float64  `json:"cape_max"`
-	CinMin          *float64 `json:"cin_min"`
+	WindSurfaceMax    float64  `json:"wind_surface_max"`
+	WindGustMax       float64  `json:"wind_gust_max"`
+	Ridge1500Max      float64  `json:"ridge_1500_max"`
+	Ridge3000Max      float64  `json:"ridge_3000_max"`
+	Ridge5600Max      float64  `json:"ridge_5600_max"`
+	PrecipTotal       float64  `json:"precip_total"`
+	PrecipStart       *string  `json:"precip_start"`
+	PrecipEnd         *string  `json:"precip_end"`
+	PrecipPeak        *string  `json:"precip_peak"`
+	PrecipType        string   `json:"precip_type"`
+	FreezingLevelMin  *int     `json:"freezing_level_min"`
+	FreezingTrend     int      `json:"freezing_trend"`
+	FreezingBelow1500 bool     `json:"freezing_below_1500"`
+	FreezingAbove5600 bool     `json:"freezing_above_5600"`
+	CloudLowMax       float64  `json:"cloud_low_max"`
+	CloudMidMax       float64  `json:"cloud_mid_max"`
+	CloudHighMax      float64  `json:"cloud_high_max"`
+	CloudDescriptor   string   `json:"cloud_descriptor"`
+	VisibilityMin     float64  `json:"visibility_min"`
+	TempMin           float64  `json:"temp_min"`
+	TempMax           float64  `json:"temp_max"`
+	WindChillMin      *float64 `json:"wind_chill_min"`
+	SnowTotal         float64  `json:"snow_total"`
+	WindLoading       bool     `json:"wind_loading"`
+	CapeMax           float64  `json:"cape_max"`
+	CinMin            *float64 `json:"cin_min"`
 }
 
 type DaySegment struct {
@@ -193,19 +193,30 @@ type DailyRiskSummary struct {
 }
 
 type RiskForecast struct {
-	Timezone string             `json:"timezone"`
-	Sources  []string           `json:"sources"`
-	Brief    GuideBrief         `json:"brief"`
-	Snapshot RiskSnapshot       `json:"snapshot"`
-	Days     []DailyRiskSummary `json:"days"`
+	Timezone  string               `json:"timezone"`
+	Sources   []string             `json:"sources"`
+	Elevation *ElevationAdjustment `json:"elevation,omitempty"`
+	Brief     GuideBrief           `json:"brief"`
+	Snapshot  RiskSnapshot         `json:"snapshot"`
+	Days      []DailyRiskSummary   `json:"days"`
+}
+
+// ElevationAdjustment records a terrain downscaling that was applied: the forecast
+// was corrected from the model gridpoint elevation to a caller-supplied target
+// elevation. Present only when downscaling actually ran.
+type ElevationAdjustment struct {
+	TargetM   float64 `json:"target_m"`
+	ModelM    float64 `json:"model_m"`
+	LapseNote string  `json:"lapse_note"`
 }
 
 // ── Open-Meteo API response models ───────────────────────────────────────────
 
 type OpenMeteoResponse struct {
-	Latitude  float64        `json:"latitude"`
-	Longitude float64        `json:"longitude"`
-	Timezone  string         `json:"timezone"`
+	Latitude  float64          `json:"latitude"`
+	Longitude float64          `json:"longitude"`
+	Elevation float64          `json:"elevation"`
+	Timezone  string           `json:"timezone"`
 	Hourly    *OpenMeteoHourly `json:"hourly"`
 }
 

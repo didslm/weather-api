@@ -15,7 +15,8 @@ The service calculates risk levels (**LOW**, **MODERATE**, **HIGH**) across six 
 
 ### 2. Intelligent Data Integration
 *   **Primary Source:** Merges **Open-Meteo** high-resolution surface data with **ECMWF** (European Centre for Medium-Range Weather Forecasts) upper-air data.
-*   **Confidence Scoring:** Compares forecasts from **GFS**, **GEM**, and **ICON** models. High variance between these models triggers a "Low Confidence" signal in the API response.
+*   **Multi-Model Blending:** Surface temperature, wind, and precipitation are combined across **forecast/best-match**, **GFS**, **GEM**, and **ICON** using a per-timestamp **median**, so no single model's outlier run drives a risk signal. Blending runs on the consensus *before* elevation downscaling.
+*   **Confidence Scoring:** Compares forecasts from **GFS**, **GEM**, and **ICON** models. High variance between these models triggers a "Low Confidence" signal in the API response. Confidence is measured from the *raw* per-model disagreement, before blending.
 *   **Climatological Fallback:** For requests beyond the 16-day live forecast window, the service generates a synthetic "Long Range Outlook" based on latitudinal climatology.
 
 ### 3. Resilience & Performance
@@ -31,6 +32,8 @@ Returns a comprehensive risk report, including:
 *   **Snapshot:** A 24-hour look at max/min values (Wind, Temp, Cloud cover, etc.).
 *   **Daily Summaries:** 10-day forecast with segmented data (Morning, Afternoon, Evening, Night).
 
+**Terrain downscaling (optional):** Pass `elevation` (or `alt`) in metres to correct the forecast from the coarse model gridpoint to the actual trailhead/summit elevation — e.g. `?lat=42.6&lon=20.1&elevation=2500`. Surface temperature is adjusted with a lapse rate derived from the model's own 850/700 hPa profile (falling back to the standard 6.5 °C/km), wind chill recomputes from the corrected temperature, and precipitation phase is reclassified (rain ⇄ snow) so a valley "rain" forecast surfaces as summit snow/ice. The applied correction is echoed in an `elevation` object on the response. Wind, gusts, and precip amount are **not** yet elevation-corrected. Accepted on `/forecast`, `/forecast/simple`, and the live window of `/forecast/window`.
+
 ### `GET /forecast/simple`
 A condensed JSON response focusing on "SimpleDay" objects, ideal for mobile dashboards or quick status checks.
 
@@ -40,6 +43,13 @@ Allows querying specific date ranges.
 
 ### `GET /health`
 Simple health check returning `{"status":"ok"}`.
+
+## Forecast Verification Log
+
+Every freshly computed forecast is appended (as JSONL, one line per forecast day) with its issue time, lead time, and predictions. This is **capture-only** — it builds a gradeable forecast history so a later verification pass can score predictions against observations. It never touches the risk engine and is skipped on cache hits.
+
+*   **`VERIFICATION_LOG_PATH`** — file path for the log (default `forecast_log.jsonl`). On Railway, point this at a mounted volume so history survives redeploys.
+*   **`VERIFICATION_LOG_DISABLED`** — set truthy (`1`/`true`/`yes`/`on`) to turn logging off.
 
 ## Deployment
 
