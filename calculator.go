@@ -84,6 +84,15 @@ func BuildRiskForecast(
 	// Confidence must be measured from the raw per-model disagreement, so compute
 	// it before the models are blended into a consensus.
 	conf := confidenceInfo(ecmwf, spreads, min(24, len(ecmwf.time)))
+	dailyConfidence := map[string]ConfidenceLevel{}
+	dateIndices := map[string][]int{}
+	for i, timestamp := range ecmwf.time {
+		date := strings.SplitN(timestamp, "T", 2)[0]
+		dateIndices[date] = append(dateIndices[date], i)
+	}
+	for date, indices := range dateIndices {
+		dailyConfidence[date] = confidenceForIndices(ecmwf, spreads, indices).level
+	}
 
 	// Multi-model blending: replace surface temp/wind/precip with the per-timestamp
 	// median across all models, so no single model's outlier run drives a signal.
@@ -99,7 +108,7 @@ func BuildRiskForecast(
 
 	brief := buildGuideBrief(ecmwf, conf)
 	snapshot := buildSnapshot(ecmwf)
-	days := buildDailySummaries(ecmwf)
+	days := buildDailySummaries(ecmwf, dailyConfidence)
 
 	tz := ""
 	if ecmwfResp != nil {
@@ -136,7 +145,7 @@ func buildGuideBrief(s *hourlySeries, conf confidence) GuideBrief {
 	visLevel := visibilityRiskLevel(minVis)
 	thunderLevel := thunderRiskLevel(maxCape)
 	freezeLevel := freezingRiskLevel(freezingFlags, s, horizon)
-	thermalLevel := thermalRiskLevel(minWindChill)
+	thermalLevel := thermalRiskLevel(minWindChill, tempMin)
 
 	riskLevels := []struct {
 		cat   RiskCategory
@@ -212,7 +221,7 @@ func buildSnapshot(s *hourlySeries) RiskSnapshot {
 
 // ── Daily summaries ───────────────────────────────────────────────────────────
 
-func buildDailySummaries(s *hourlySeries) []DailyRiskSummary {
+func buildDailySummaries(s *hourlySeries, dailyConfidence map[string]ConfidenceLevel) []DailyRiskSummary {
 	// Group hourly indices by date
 	dateIndex := map[string][]int{}
 	dateOrder := []string{}
@@ -256,31 +265,14 @@ func buildDailySummaries(s *hourlySeries) []DailyRiskSummary {
 		maxPrecipRate := maxSlice(precip)
 		freezingFlags := hasFreezingPrecip(ptypes)
 
-		// Wind chill for thermal risk
-		var windChills []float64
-		for _, idx := range indices {
-			temp := s.temperature2m[idx]
-			wind := s.windSpeed10m[idx]
-			if wind > 4.8 && temp < 10 {
-				chill := 13.12 + 0.6215*temp - 11.37*math.Pow(wind, 0.16) + 0.3965*temp*math.Pow(wind, 0.16)
-				windChills = append(windChills, chill)
-			}
-		}
-		var minChill *float64
-		if len(windChills) > 0 {
-			v := minSlice(windChills)
-			minChill = &v
-		}
-
+		minChill := windChillForIndices(s, indices)
+		fd := freezingDataForIndices(s, indices)
 		windLevel := windRiskLevel(maxRidge, maxGust)
 		precipLevel := precipRiskLevel(totalPrecip, maxPrecipRate)
 		visLevel := visibilityRiskLevel(minVis)
 		thunderLevel := thunderRiskLevel(maxCape)
-		var freezeLevel RiskLevel
-		if freezingFlags {
-			freezeLevel = RiskHigh
-		}
-		thermalLevel := thermalRiskLevel(minChill)
+		freezeLevel := freezingLevelRisk(freezingFlags, fd)
+		thermalLevel := thermalRiskLevel(minChill, minSlice(temps))
 
 		riskLevels := []struct {
 			cat   RiskCategory
@@ -315,32 +307,15 @@ func buildDailySummaries(s *hourlySeries) []DailyRiskSummary {
 			overallRisk = RiskLow
 		}
 
-		// Freezing level for this day
-		var freezingLevels []float64
-		for _, idx := range indices {
-			if fl := freezingLevelAt(s.temp850[idx], s.temp700[idx], s.temp500[idx], s.height850[idx], s.height700[idx], s.height500[idx]); fl != nil {
-				freezingLevels = append(freezingLevels, *fl)
-			}
-		}
-		var freezingMin *int
 		freezingTrendVal := 0
-		if len(freezingLevels) > 0 {
-			v := int(minSlice(freezingLevels))
-			freezingMin = &v
-			if len(freezingLevels) > 1 {
-				delta := freezingLevels[len(freezingLevels)-1] - freezingLevels[0]
-				switch {
-				case delta > 200:
-					freezingTrendVal = 1
-				case delta < -200:
-					freezingTrendVal = -1
-				}
-			}
+		if fd.trend > 200 {
+			freezingTrendVal = 1
+		} else if fd.trend < -200 {
+			freezingTrendVal = -1
 		}
-
-		confidenceEst := ConfHigh
-		if maxRidge > 60 || totalPrecip > 30 || minVis < 500 {
-			confidenceEst = ConfMedium
+		confidenceEst := dailyConfidence[date]
+		if confidenceEst == "" {
+			confidenceEst = ConfLow
 		}
 
 		summaries = append(summaries, DailyRiskSummary{
@@ -354,7 +329,7 @@ func buildDailySummaries(s *hourlySeries) []DailyRiskSummary {
 			WindDirection:    windDirDaily,
 			PrecipSum:        sumSlice(precip),
 			SnowSum:          sumSlice(snow),
-			FreezingLevelMin: freezingMin,
+			FreezingLevelMin: fd.minLevel,
 			FreezingTrend:    freezingTrendVal,
 			VisibilityMin:    minVis,
 			Confidence:       confidenceEst,
@@ -458,13 +433,9 @@ func windRiskLevel(maxRidge, maxGust float64) RiskLevel {
 
 func precipRiskLevel(total, maxRate float64) RiskLevel {
 	switch {
-	case maxRate >= 5:
+	case maxRate >= 5 || total >= 30:
 		return RiskHigh
-	case maxRate >= 2:
-		return RiskModerate
-	case total >= 30:
-		return RiskHigh
-	case total >= 10:
+	case maxRate >= 2 || total >= 10:
 		return RiskModerate
 	default:
 		return RiskLow
@@ -494,10 +465,13 @@ func thunderRiskLevel(maxCape float64) RiskLevel {
 }
 
 func freezingRiskLevel(freezingFlags bool, s *hourlySeries, horizon int) RiskLevel {
+	return freezingLevelRisk(freezingFlags, calcFreezingData(s, horizon))
+}
+
+func freezingLevelRisk(freezingFlags bool, fd freezingData) RiskLevel {
 	if freezingFlags {
 		return RiskHigh
 	}
-	fd := calcFreezingData(s, horizon)
 	switch {
 	case fd.below1500:
 		return RiskModerate
@@ -508,14 +482,15 @@ func freezingRiskLevel(freezingFlags bool, s *hourlySeries, horizon int) RiskLev
 	}
 }
 
-func thermalRiskLevel(minChill *float64) RiskLevel {
-	if minChill == nil {
-		return RiskLow
+func thermalRiskLevel(minChill *float64, tempMin float64) RiskLevel {
+	feel := tempMin
+	if minChill != nil {
+		feel = math.Min(feel, *minChill)
 	}
 	switch {
-	case *minChill <= -10:
+	case feel <= -10:
 		return RiskHigh
-	case *minChill <= 0:
+	case feel <= 0:
 		return RiskModerate
 	default:
 		return RiskLow
@@ -556,38 +531,59 @@ type confidence struct {
 	detail string
 }
 
+// Confidence uses the worst aligned hourly spread, preserving uncertainty in
+// event timing. Every assessed hour needs at least one complete peer model.
 func confidenceInfo(ecmwf *hourlySeries, spreads []*spreadSeries, horizon int) confidence {
-	if len(spreads) == 0 {
-		return confidence{ConfLow, "Single-source"}
+	return confidenceForIndices(ecmwf, spreads, rangeInts(0, horizon-1))
+}
+
+func confidenceForIndices(primary *hourlySeries, spreads []*spreadSeries, indices []int) confidence {
+	if len(spreads) == 0 || len(indices) == 0 {
+		return confidence{ConfLow, "Single-source or no comparable hours"}
 	}
-
-	var temps, winds, precips []float64
-	temps = append(temps, avgSlice(ecmwf.temperature2m[:horizon]))
-	winds = append(winds, avgSlice(ecmwf.windSpeed10m[:horizon]))
-	precips = append(precips, avgSlice(ecmwf.precipitation[:horizon]))
-
-	for _, sp := range spreads {
-		h := min(horizon, len(sp.time))
-		temps = append(temps, avgSlice(sp.temperature2m[:h]))
-		winds = append(winds, avgSlice(sp.windSpeed10m[:h]))
-		precips = append(precips, avgSlice(sp.precipitation[:h]))
+	lookups := make([]map[string]int, len(spreads))
+	for k, sp := range spreads {
+		lookups[k] = make(map[string]int, len(sp.time))
+		for i, timestamp := range sp.time {
+			lookups[k][timestamp] = i
+		}
 	}
-
-	tempSpread := maxSlice(temps) - minSlice(temps)
-	windSpread := maxSlice(winds) - minSlice(winds)
-	precipSpread := maxSlice(precips) - minSlice(precips)
-
+	var tempSpread, windSpread, precipSpread float64
+	compared := 0
+	for _, i := range indices {
+		temps := []float64{primary.temperature2m[i]}
+		winds := []float64{primary.windSpeed10m[i]}
+		precips := []float64{primary.precipitation[i]}
+		if !finite(temps[0]) || !finite(winds[0]) || !finite(precips[0]) {
+			continue
+		}
+		for k, sp := range spreads {
+			j, ok := lookups[k][primary.time[i]]
+			if !ok || !finite(sp.temperature2m[j]) || !finite(sp.windSpeed10m[j]) || !finite(sp.precipitation[j]) {
+				continue
+			}
+			temps = append(temps, sp.temperature2m[j])
+			winds = append(winds, sp.windSpeed10m[j])
+			precips = append(precips, sp.precipitation[j])
+		}
+		if len(temps) == 1 {
+			continue
+		}
+		compared++
+		tempSpread = math.Max(tempSpread, maxSlice(temps)-minSlice(temps))
+		windSpread = math.Max(windSpread, maxSlice(winds)-minSlice(winds))
+		precipSpread = math.Max(precipSpread, maxSlice(precips)-minSlice(precips))
+	}
 	var lvl ConfidenceLevel
 	switch {
-	case windSpread >= 12 || precipSpread >= 3 || tempSpread >= 4:
+	case compared < len(indices) || windSpread >= 12 || precipSpread >= 3 || tempSpread >= 4:
 		lvl = ConfLow
 	case windSpread >= 6 || precipSpread >= 1.5 || tempSpread >= 2:
 		lvl = ConfMedium
 	default:
 		lvl = ConfHigh
 	}
-
-	detail := fmt.Sprintf("Spread wind %.0f km/h | precip %.1f mm/h | temp %.1f°", windSpread, precipSpread, tempSpread)
+	detail := fmt.Sprintf("Max hourly spread wind %.0f km/h | precip %.1f mm/h | temp %.1f° | compared %d/%d hrs", windSpread, precipSpread, tempSpread, compared, len(indices))
 	return confidence{lvl, detail}
 }
 
@@ -619,7 +615,7 @@ func windSignal(maxRidge, maxGust float64) WindSignal {
 func tempSignal(minChill *float64, tempMin float64) TempSignal {
 	feel := tempMin
 	if minChill != nil {
-		feel = *minChill
+		feel = math.Min(feel, *minChill)
 	}
 	switch {
 	case feel <= -10:
@@ -829,8 +825,12 @@ func implications(dominant RiskCategory) []string {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 func windChillMin(s *hourlySeries, horizon int) *float64 {
+	return windChillForIndices(s, rangeInts(0, horizon-1))
+}
+
+func windChillForIndices(s *hourlySeries, indices []int) *float64 {
 	var minChill *float64
-	for i := 0; i < horizon; i++ {
+	for _, i := range indices {
 		temp := s.temperature2m[i]
 		wind := s.windSpeed10m[i]
 		if temp <= 10 && wind > 4.8 {
@@ -940,28 +940,19 @@ func precipTypeLabel(code int) string {
 }
 
 func calcFreezingData(s *hourlySeries, horizon int) freezingData {
+	return freezingDataForIndices(s, rangeInts(0, horizon-1))
+}
+
+func freezingDataForIndices(s *hourlySeries, indices []int) freezingData {
 	var levels []float64
-	for i := 0; i < horizon; i++ {
+	below, above := len(indices) > 0, len(indices) > 0
+	for _, i := range indices {
 		if fl := freezingLevelAt(s.temp850[i], s.temp700[i], s.temp500[i], s.height850[i], s.height700[i], s.height500[i]); fl != nil {
 			levels = append(levels, *fl)
 		}
+		below = below && finite(s.temp850[i]) && s.temp850[i] <= 0
+		above = above && finite(s.temp500[i]) && s.temp500[i] >= 0
 	}
-
-	below := true
-	for i := 0; i < horizon; i++ {
-		if s.temp850[i] > 0 {
-			below = false
-			break
-		}
-	}
-	above := true
-	for i := 0; i < horizon; i++ {
-		if s.temp500[i] < 0 {
-			above = false
-			break
-		}
-	}
-
 	if len(levels) == 0 {
 		return freezingData{below1500: below, above5600: above}
 	}
@@ -976,6 +967,9 @@ func freezingLevelAt(t850, t700, t500, h850, h700, h500 float64) *float64 {
 	for i := 0; i < len(points)-1; i++ {
 		t1, h1 := points[i][0], points[i][1]
 		t2, h2 := points[i+1][0], points[i+1][1]
+		if !finite(t1) || !finite(t2) || !finite(h1) || !finite(h2) {
+			continue
+		}
 		if (t1 >= 0 && t2 <= 0) || (t1 <= 0 && t2 >= 0) {
 			if t1 == t2 {
 				return &h1
@@ -1040,7 +1034,7 @@ func thermalValue(s *hourlySeries, horizon int) string {
 	tempMax := maxSlice(s.temperature2m[:horizon])
 	chill := windChillMin(s, horizon)
 	if chill != nil {
-		return fmt.Sprintf("%.0f°", *chill)
+		return fmt.Sprintf("%.0f°", math.Min(tempMin, *chill))
 	}
 	return fmt.Sprintf("%.0f-%.0f°", tempMin, tempMax)
 }
@@ -1136,9 +1130,9 @@ func toHourlySeries(r *OpenMeteoResponse) *hourlySeries {
 		cloudLow:         derefFloats(h.CloudCoverLow, size, 0),
 		cloudMid:         derefFloats(h.CloudCoverMid, size, 0),
 		cloudHigh:        derefFloats(h.CloudCoverHigh, size, 0),
-		temp850:          derefFloats(h.Temperature850hPa, size, 0),
-		temp700:          derefFloats(h.Temperature700hPa, size, 0),
-		temp500:          derefFloats(h.Temperature500hPa, size, 0),
+		temp850:          derefFloats(h.Temperature850hPa, size, math.NaN()),
+		temp700:          derefFloats(h.Temperature700hPa, size, math.NaN()),
+		temp500:          derefFloats(h.Temperature500hPa, size, math.NaN()),
 		height850:        derefFloats(h.GeopotentialHeight850hPa, size, defaultHeight850),
 		height700:        derefFloats(h.GeopotentialHeight700hPa, size, defaultHeight700),
 		height500:        derefFloats(h.GeopotentialHeight500hPa, size, defaultHeight500),
@@ -1170,9 +1164,9 @@ func toSpreadSeries(r *OpenMeteoResponse) *spreadSeries {
 	}
 	return &spreadSeries{
 		time:          h.Time[:size],
-		temperature2m: derefFloats(h.Temperature2m, size, 0),
-		windSpeed10m:  derefFloats(h.WindSpeed10m, size, 0),
-		precipitation: derefFloats(h.Precipitation, size, 0),
+		temperature2m: derefFloats(h.Temperature2m, size, math.NaN()),
+		windSpeed10m:  derefFloats(h.WindSpeed10m, size, math.NaN()),
+		precipitation: derefFloats(h.Precipitation, size, math.NaN()),
 	}
 }
 
@@ -1322,3 +1316,5 @@ func orEmpty[T any](s []T) []T {
 	}
 	return s
 }
+
+func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }

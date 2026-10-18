@@ -74,11 +74,8 @@ func downscaleSeries(s *hourlySeries, gridElev, targetElev float64) *ElevationAd
 func localLapseCPerKm(s *hourlySeries, i int) (float64, bool) {
 	t850, t700 := s.temp850[i], s.temp700[i]
 	h850, h700 := s.height850[i], s.height700[i]
-	if h700 <= h850 {
+	if !finite(t850) || !finite(t700) || !finite(h850) || !finite(h700) || h700 <= h850 {
 		return standardLapseCPerKm, false
-	}
-	if t850 == 0 && t700 == 0 {
-		return standardLapseCPerKm, false // both defaulted ⇒ profile absent
 	}
 	lapse := (t850 - t700) / ((h700 - h850) / 1000.0)
 	if math.IsNaN(lapse) || lapse < minLapseCPerKm || lapse > maxLapseCPerKm {

@@ -141,6 +141,9 @@ func TestBuildRiskForecastBlendsValuesButKeepsRawConfidence(t *testing.T) {
 	if f.Brief.TopSignals.Confidence != ConfMedium {
 		t.Fatalf("expected MEDIUM confidence from raw spread, got %q", f.Brief.TopSignals.Confidence)
 	}
+	if f.Days[0].Confidence != ConfMedium {
+		t.Fatalf("expected daily MEDIUM confidence from raw spread, got %q", f.Days[0].Confidence)
+	}
 	// Blended temp is median{8,10,10} = 10 at every hour.
 	if math.Abs(f.Snapshot.TempMax-10) > 1e-9 || math.Abs(f.Snapshot.TempMin-10) > 1e-9 {
 		t.Fatalf("expected blended temp 10, got max=%.4f min=%.4f", f.Snapshot.TempMax, f.Snapshot.TempMin)
@@ -168,5 +171,48 @@ func makeSpreadResp(hours int, temp, wind, precip float64) *OpenMeteoResponse {
 			WindSpeed10m:  ptrs(winds),
 			Precipitation: ptrs(precips),
 		},
+	}
+}
+
+func TestBlendedPrecipitationKeepsPhaseAmountsConsistent(t *testing.T) {
+	for _, tc := range []struct {
+		name                          string
+		temp, oldPrecip, rain, snow   float64
+		ptype                         float64
+		consensus, wantRain, wantSnow float64
+		wantType                      int
+	}{
+		{"dry removes snow", -5, 1, 0, 0.7, 2, 0, 0, 0, 0},
+		{"dry removes freezing rain", -5, 1, 1, 0, 3, 0, 0, 0, 0},
+		{"snow scales down", -5, 4, 0, 2.8, 2, 2, 0, 1.4, 2},
+		{"snow scales up", -5, 1, 0, 0.7, 2, 4, 0, 2.8, 2},
+		{"rain scales down", 5, 4, 4, 0, 1, 2, 2, 0, 1},
+		{"new cold precipitation", -5, 0, 0, 0, 0, 2, 0, 1.4, 2},
+		{"new warm precipitation", 5, 0, 0, 0, 0, 2, 2, 0, 1},
+		{"wet freezing hazard preserved", -5, 1, 1, 0, 3, 2, 2, 0, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			surface := makeSurfaceResp(1000, 1, tc.temp)
+			surface.Hourly.Precipitation = ptrs([]float64{tc.oldPrecip})
+			surface.Hourly.Rain = ptrs([]float64{tc.rain})
+			surface.Hourly.Snowfall = ptrs([]float64{tc.snow})
+			surface.Hourly.PrecipitationType = ptrs([]float64{tc.ptype})
+			peers := []*OpenMeteoResponse{
+				makeSpreadResp(1, tc.temp, 0, tc.consensus),
+				makeSpreadResp(1, tc.temp, 0, tc.consensus),
+			}
+			s := toHourlySeries(surface)
+			blendSeries(s, []*spreadSeries{toSpreadSeries(peers[0]), toSpreadSeries(peers[1])})
+			if math.Abs(s.rain[0]-tc.wantRain) > 1e-9 || math.Abs(s.snowfall[0]-tc.wantSnow) > 1e-9 || s.precipType[0] != tc.wantType {
+				t.Fatalf("rain=%v snow=%v type=%v; want %v %v %v", s.rain[0], s.snowfall[0], s.precipType[0], tc.wantRain, tc.wantSnow, tc.wantType)
+			}
+			f := requireForecast(t, surface, peers...)
+			if math.Abs(f.Days[0].PrecipSum-tc.consensus) > 1e-9 || math.Abs(f.Days[0].SnowSum-tc.wantSnow) > 1e-9 {
+				t.Fatalf("daily precipitation amounts contradict consensus: %+v", f.Days[0])
+			}
+			if tc.consensus == 0 && (toSimpleDays(f)[0].Condition == "snow" || f.Snapshot.PrecipType != "None" || f.Brief.DominantRisk == CatFreezing) {
+				t.Fatal("dry consensus retains precipitation hazard")
+			}
+		})
 	}
 }

@@ -16,7 +16,8 @@ The service calculates risk levels (**LOW**, **MODERATE**, **HIGH**) across six 
 ### 2. Intelligent Data Integration
 *   **Primary Source:** Merges **Open-Meteo** high-resolution surface data with **ECMWF** (European Centre for Medium-Range Weather Forecasts) upper-air data.
 *   **Multi-Model Blending:** Surface temperature, wind, and precipitation are combined across **forecast/best-match**, **GFS**, **GEM**, and **ICON** using a per-timestamp **median**, so no single model's outlier run drives a risk signal. Blending runs on the consensus *before* elevation downscaling.
-*   **Confidence Scoring:** Compares forecasts from **GFS**, **GEM**, and **ICON** models. High variance between these models triggers a "Low Confidence" signal in the API response. Confidence is measured from the *raw* per-model disagreement, before blending.
+*   **Confidence Scoring:** Compares forecasts from **GFS**, **GEM**, and **ICON** models at matching timestamps, using the largest hourly temperature, wind, or precipitation spread. Confidence is measured from the *raw* forecasts before blending, separately for the brief and each day. Single-source hours or incomplete comparison coverage result in low confidence.
+*   **Consistent Risk Signals:** Rain and snow amounts follow the blended precipitation total. Thermal risk includes air temperature during calm hours, and daily summaries use the same freezing-level rules as the brief. Missing upper-air temperatures remain unknown; they do not create a synthetic freezing level.
 *   **Climatological Fallback:** For requests beyond the 16-day live forecast window, the service generates a synthetic "Long Range Outlook" based on latitudinal climatology.
 
 ### 3. Resilience & Performance

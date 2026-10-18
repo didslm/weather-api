@@ -1,6 +1,9 @@
 package main
 
-import "sort"
+import (
+	"math"
+	"sort"
+)
 
 // ── Multi-model blending ──────────────────────────────────────────────────────
 //
@@ -17,8 +20,8 @@ import "sort"
 //   - runs BEFORE elevation downscaling, so the lapse correction and precip-phase
 //     reclassification operate on the consensus values.
 //
-// Only these three fields are blended; the spread models don't carry the others
-// (gusts, visibility, CAPE, upper-air), which stay with the primary source.
+// Rain/snow amounts and phase are reconciled with the blended precipitation.
+// Other fields (gusts, visibility, CAPE, upper-air) stay with the primary source.
 func blendSeries(ecmwf *hourlySeries, spreads []*spreadSeries) {
 	if ecmwf == nil || len(spreads) == 0 {
 		return
@@ -44,16 +47,52 @@ func blendSeries(ecmwf *hourlySeries, spreads []*spreadSeries) {
 			if !ok {
 				continue
 			}
-			temps = append(temps, sp.temperature2m[j])
-			winds = append(winds, sp.windSpeed10m[j])
-			precips = append(precips, sp.precipitation[j])
+			if finite(sp.temperature2m[j]) {
+				temps = append(temps, sp.temperature2m[j])
+			}
+			if finite(sp.windSpeed10m[j]) {
+				winds = append(winds, sp.windSpeed10m[j])
+			}
+			if finite(sp.precipitation[j]) {
+				precips = append(precips, sp.precipitation[j])
+			}
 		}
-		if len(temps) == 1 {
-			continue // no other model covered this timestamp
-		}
+		oldPrecip := ecmwf.precipitation[i]
 		ecmwf.temperature2m[i] = median(temps)
 		ecmwf.windSpeed10m[i] = median(winds)
 		ecmwf.precipitation[i] = median(precips)
+		if len(precips) > 1 {
+			reconcilePrecipitation(ecmwf, i, oldPrecip)
+		}
+	}
+}
+
+// Keep primary-source phase proportions when its amount changes. If the primary
+// was dry, infer rain/snow from the consensus temperature using the same snow
+// threshold as terrain downscaling. Special freezing types survive wet hours.
+func reconcilePrecipitation(s *hourlySeries, i int, oldPrecip float64) {
+	if i >= len(s.rain) || i >= len(s.snowfall) || i >= len(s.precipType) {
+		return
+	}
+	precip := s.precipitation[i]
+	if precip <= 0 {
+		s.rain[i], s.snowfall[i], s.precipType[i] = 0, 0, 0
+		return
+	}
+	if oldPrecip > 0 {
+		ratio := precip / oldPrecip
+		s.rain[i] = math.Min(precip, s.rain[i]*ratio)
+		s.snowfall[i] = math.Min(precip*mmToSnowCm, s.snowfall[i]*ratio)
+		return
+	}
+	s.rain[i], s.snowfall[i] = 0, 0
+	switch {
+	case isFreezingPrecip(s.precipType[i]) || s.precipType[i] == 4:
+		return
+	case s.temperature2m[i] <= snowCeilingC:
+		s.snowfall[i], s.precipType[i] = precip*mmToSnowCm, 2
+	default:
+		s.rain[i], s.precipType[i] = precip, 1
 	}
 }
 
