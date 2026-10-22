@@ -213,7 +213,8 @@ class Manager:
             shutil.rmtree(workspace)
 
     def probe(self, url, sha, forecast=False):
-        headers = {'Cache-Control': 'no-cache', 'Connection': 'close'}
+        headers = {'User-Agent': 'weather-phone-deploy',
+                   'Cache-Control': 'no-cache', 'Connection': 'close'}
         for endpoint in ('/health', '/version'):
             request = Request(url + endpoint, headers=headers)
             with urlopen(request, timeout=10) as response:
