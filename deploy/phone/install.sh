@@ -3,11 +3,12 @@
 set -eu
 [ "$(id -u)" -eq 0 ] || { echo 'Run with sudo' >&2; exit 1; }
 phone_files=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-for dependency in python3 nginx git curl systemctl; do
+for dependency in python3 nginx git curl systemctl go runuser; do
     command -v "$dependency" >/dev/null || { echo "Missing $dependency" >&2; exit 1; }
 done
 install -d -m 755 /usr/local/sbin /opt/weather-risk-api /opt/weather-risk-api/releases
 install -d -o ayu -g ayu -m 700 /var/lib/weather-risk-api
+install -d -o ayu -g ayu -m 755 /var/cache/weather-risk-api
 install -m 755 "$phone_files/weather_deploy.py" /usr/local/sbin/weather-deploy
 install -m 644 "$phone_files/nginx.conf" /opt/weather-risk-api/nginx.conf
 for service in weather-release@.service weather-proxy.service weather-update.service weather-update.timer; do

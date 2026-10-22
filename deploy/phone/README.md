@@ -1,121 +1,114 @@
-# Phone releases
+# Deployments run entirely on the phone
 
-The public API is **https://weather-api.shtegtimi.com**. Cloudflare's named tunnel
-`weather-api-phone` connects to the stable Nginx listener on **127.0.0.1:8083**.
-Application releases listen on separate loopback ports starting at 18082. The AI
-server on 8080 and Shtegtimi test site on 8081 are independent.
+Public API: **https://weather-api.shtegtimi.com**.
 
-## Automatic deployment
+A push to `main` from **any machine** is enough. The phone checks GitHub every
+minute, pulls main into a fresh local workspace, runs the tests, builds a native
+ARM64 binary, and promotes it after verification. No GitHub Actions, release
+assets, build server, GitHub token, public SSH, or developer laptop is involved.
+The repository must remain public for credential-free fetches.
 
-1. A push to `main` runs `.github/workflows/phone-release.yml`: Go race tests,
-   vet, deployment-manager tests, and an ARM64 build with the exact commit SHA.
-2. Only successful main builds publish a GitHub release tagged `phone-<full SHA>`
-   with `server-linux-arm64` and its size/checksum/revision manifest. Pull requests
-   test and build, but never publish. GitHub Actions serializes runs for main.
-3. `weather-update.timer` checks main every 60 seconds after the previous check
-   finishes. The phone uses outbound HTTPS only; no GitHub token, public SSH,
-   inbound webhook, or self-hosted runner is required. This delivery mechanism
-   assumes the repository and build assets remain public.
-4. The root-owned deployment manager downloads only the build matching current
-   main, verifies its manifest and ARM64 format, and checks main again before
-   promotion. Each immutable release lives in `/opt/weather-risk-api/releases/SHA`.
-5. A systemd instance starts the candidate **as ayu**. It must pass `/health`,
-   `/version`, matching `X-Release` headers, and a live forecast schema check.
-6. An atomic `current` symlink selects Nginx's upstream configuration. Nginx
-   validates before a graceful reload; existing workers can finish requests.
-   The manager verifies the local proxy and public hostname, then checks release
-   identity and health for a further 20 seconds before accepting the release.
-7. Failed promotion restores the previous route and stops the candidate. The
-   failed SHA is not retried automatically until a new commit or explicit resume.
-   Failed downloads are retried; unavailable builds leave the live release alone.
-8. The last **five successful releases** remain on disk, including protected
-   current/previous targets. Current and previous processes stay running. Other
-   processes are stopped gracefully before their directories are pruned.
+## Deployment sequence
 
-The release manager holds a phone-side file lock. An interrupted switch leaves a
-journal; before proxy startup, recovery restores the last committed route and
-starts current/previous processes. Automatic deployment does not update the
-root-owned manager or systemd/proxy configuration; apply infrastructure changes
-explicitly with `install.sh`.
+1. `weather-update.timer` checks main every 60 seconds after the previous check
+   finishes. It holds a phone-side file lock so two deployments cannot overlap.
+2. Clone main into a new workspace under `/var/cache/weather-risk-api`, then
+   verify its full commit SHA. Source commands run **as ayu**, never as root.
+3. On the phone, run `go test ./...`, `go vet ./...`, deployment-manager Python
+   tests, and `go build` with the commit SHA embedded. Go build/module caches
+   persist between builds. Compilation is limited to two Go threads, a 150% CPU
+   quota and 2 GB service memory limit to leave room for the live API.
+4. Store the binary, checksum/size/revision manifest, source archive, port, and
+   service environment in `/opt/weather-risk-api/releases/FULL_SHA`. The manager
+   rechecks main after building so an obsolete commit cannot overtake a new push.
+5. Start the candidate as an unprivileged systemd instance on its own loopback
+   port. Check `/health`, `/version`, `X-Release`, and a real forecast response.
+6. Atomically change the `current` symlink and gracefully reload Nginx. Nginx
+   validates the configuration before reloading; old workers finish requests.
+7. Verify the local proxy and public hostname, then observe health/revision for
+   another 20 seconds. If checks fail, restore the previous route automatically.
+8. Keep the last **five successful releases** on disk. Keep current and previous
+   processes running for quick rollback; stop older processes gracefully before
+   pruning their directories. Live data is stored separately and never pruned.
 
-## Operations
+A failed test/build or candidate is not retried for the same SHA until an explicit
+resume or a new commit. Network failures are retried on the next timer. A manual
+rollback pauses automatic promotion so the next timer cannot undo the rollback.
+An interrupted switch is journaled; proxy startup restores the previous committed
+route and starts the required release processes.
 
-SSH target: `ayu@172.16.42.1` over USB (or the phone's Tailscale address).
+Cloudflare's named tunnel `weather-api-phone` points to stable Nginx on
+**127.0.0.1:8083**. Workers use separate loopback ports starting at 18082. The AI
+server on 8080 and Shtegtimi test site on 8081 remain independent.
+
+## Commands on the phone
+
+SSH: `ayu@172.16.42.1` over USB, or the phone's Tailscale address.
 
 ```sh
-sudo weather-deploy status
-sudo weather-deploy rollback                 # previous working release; pauses auto deployment
-sudo weather-deploy rollback FULL_COMMIT_SHA # one of the retained successful releases
-sudo weather-deploy pause
-sudo weather-deploy resume                   # clear pause/failed SHA; next timer may deploy main
-sudo systemctl start weather-update          # check main now
+sudo /usr/local/sbin/weather-deploy status
+sudo /usr/local/sbin/weather-deploy rollback                  # previous successful release
+sudo /usr/local/sbin/weather-deploy rollback FULL_COMMIT_SHA  # retained successful release
+sudo /usr/local/sbin/weather-deploy pause
+sudo /usr/local/sbin/weather-deploy resume                   # allow main/retry failed SHA
+sudo systemctl start weather-update                          # check main immediately
 sudo journalctl -u weather-update -n 80 --no-pager
 sudo journalctl -u weather-proxy -n 50 --no-pager
 curl -fsS https://weather-api.shtegtimi.com/version
 ```
 
-Manual rollback pauses automatic promotion so the next timer cannot immediately
-undo the rollback. To retry a rejected main commit, run `resume` and start
-`weather-update`. To inspect an individual worker:
+Worker logs:
 
 ```sh
-sudo systemctl status weather-release@FULL_COMMIT_SHA
 sudo journalctl -u weather-release@FULL_COMMIT_SHA -n 50 --no-pager
 ```
 
-Release identity is compiled into the binary, exposed by `/version` and the
-`X-Release` response header. Forecast JSON remains compatible. Each release keeps
-its own in-memory cache; a real forecast warms the candidate before promotion.
-Forecast verification logs persist under `/var/lib/weather-risk-api/SHA.jsonl`,
-outside pruned release directories. Older pre-migration logs remain under
-`/home/ayu/Projects/weather-risk-api/data`.
+`current` and `previous` are symlinks under `/opt/weather-risk-api`. Release identity
+is compiled into `/version` and the `X-Release` response header. Forecast response
+JSON remains compatible. Candidates warm their own in-memory cache before traffic
+switching. Forecast verification logs persist in `/var/lib/weather-risk-api/SHA.jsonl`.
+Pre-migration logs remain under `/home/ayu/Projects/weather-risk-api/data`.
 
-## Provision or restore the phone
+## Provisioning or infrastructure changes
 
-Requirements: postmarketOS ARM64, systemd, user `ayu`, Python 3, Git, Nginx, curl,
-Cloudflared, CA certificates, and Internet access. Transfer this directory and run:
+Requirements: postmarketOS ARM64, systemd, user `ayu`, Python 3, Go, Git, Nginx,
+curl, runuser, Cloudflared, CA certificates, and Internet access. Install Go with
+`sudo apk add go` if needed. Transfer this directory and provision:
 
 ```sh
 sudo sh deploy/phone/install.sh
-```
-
-For the first release, produce a binary with the exact source commit SHA:
-
-```sh
-make test
-python3 -m unittest discover -s deploy/phone -p 'test_*.py' -v
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath \
-  -ldflags="-s -w -X main.buildRevision=$(git rev-parse HEAD)" \
-  -o /tmp/server-linux-arm64 .
-```
-
-Generate the same manifest as the workflow, transfer the binary and manifest, then
-bootstrap **before changing the live tunnel route**:
-
-```sh
-sudo weather-deploy install FULL_COMMIT_SHA /path/to/server-linux-arm64 /path/to/manifest.json
-curl -fsS http://127.0.0.1:8083/version
+sudo /usr/local/sbin/weather-deploy update
 sudo systemctl enable weather-proxy
 ```
 
-Point the Cloudflare published application at `http://localhost:8083`, verify
-HTTPS `/health`, `/version`, and a forecast, then set `/etc/weather-deploy.json`:
+Before the first bootstrap, `/etc/weather-deploy.json` has an empty public URL so
+the candidate can be checked alongside the existing API. Point Cloudflare at
+`http://localhost:8083`, verify the public route, then configure:
 
 ```json
 {"public_url":"https://weather-api.shtegtimi.com","soak_seconds":20}
 ```
 
-Enable the updater with `sudo systemctl enable --now weather-update.timer`.
-The tunnel token remains at `/home/ayu/.config/weather-api/tunnel.token` (mode
-600); it does not belong in this repository. The legacy `weather-risk-api.service`
-on port 8082 can be disabled after the public proxy route is verified.
+```sh
+sudo systemctl enable --now weather-update.timer
+```
 
-## Design limits
+The root-owned manager, unit templates, and Nginx configuration are infrastructure.
+Apply their changes explicitly with `install.sh`; application releases never
+execute repository deployment scripts as root. Cloned source, tests, and build
+commands run as ayu inside an isolated build workspace. Main is the trust boundary:
+anyone able to change it can deploy code with that user's privileges.
 
-This prevents the normal stop/start deployment gap; it does not make a single
-phone immune to power, network, kernel, proxy, or hardware failure. Post-promotion
-checks detect immediate failures; a later logic bug still requires rollback.
-GitHub main and its workflow/release permissions are the deployment trust boundary.
-The checksum detects incomplete/corrupt transfers; it is not independent artifact
-attestation. Only protected main should publish phone releases. No extra SSH or
-GitHub credential is installed on the phone.
+Cloudflare's token remains only at `/home/ayu/.config/weather-api/tunnel.token`
+(mode 600). The legacy `weather-risk-api.service` on 8082 is disabled after proxy
+migration. Keep shared data outside release directories when restoring backups.
+
+## Limits
+
+This avoids the normal deployment stop/start gap. A single phone can still lose
+availability through power, network, kernel, proxy, or hardware failure. Checks
+catch immediate failures; a later logic bug still requires rollback. The five
+release limit applies to successful on-phone deployments, not to log history or
+Go's shared build cache. First compilation can take several minutes; later builds
+reuse the cache. If a build exceeds its resource/time limits, the live release
+continues serving.

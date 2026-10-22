@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phone releases: download, verify, probe, gracefully promote, and roll back.
+"""Phone releases: fetch main, test, build, gracefully promote, and roll back.
 
 Installed root-owned outside release directories. Application binaries always run
 as ayu through a fixed systemd template; downloaded code is never executed as root.
@@ -10,20 +10,29 @@ import fcntl
 import hashlib
 import json
 import os
+import pwd
 from pathlib import Path
 import re
 import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
-from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 REPOSITORY = 'didslm/weather-api'
 REVISION = re.compile(r'^[0-9a-f]{40}$')
 MAX_BINARY = 32 * 1024 * 1024
 PROXY = 'http://127.0.0.1:8083'
+
+
+class BuildRejected(RuntimeError):
+    pass
+
+
+class MainChanged(RuntimeError):
+    pass
 
 
 def log(message):
@@ -48,15 +57,6 @@ def revision(value):
     if not REVISION.fullmatch(value):
         raise ValueError('Expected a full lowercase 40-character Git commit SHA')
     return value
-
-
-def fetch(url, limit):
-    request = Request(url, headers={'User-Agent': 'weather-phone-deploy', 'Cache-Control': 'no-cache'})
-    with urlopen(request, timeout=30) as response:
-        data = response.read(limit + 1)
-    if len(data) > limit:
-        raise ValueError('Download exceeded expected size')
-    return data
 
 
 def verify_artifact(sha, binary, manifest):
@@ -167,12 +167,50 @@ class Manager:
         os.replace(temporary, release)
         log(f'Staged {sha} on localhost:{port}')
 
-    def download(self, sha):
+    def build(self, sha):
+        """Fetch, test, and compile main on the phone as the unprivileged user."""
         sha = revision(sha)
-        prefix = f'https://github.com/{REPOSITORY}/releases/download/phone-{sha}'
-        manifest = json.loads(fetch(prefix + '/manifest.json', 4096))
-        binary = fetch(prefix + '/server-linux-arm64', MAX_BINARY)
-        self.stage(sha, binary, manifest)
+        existing = self.releases / sha
+        if existing.exists() and (existing / 'success').exists():
+            log(f'Reusing successful local build {sha}')
+            return
+        account = pwd.getpwnam('ayu')
+        cache = Path('/var/cache/weather-risk-api')
+        cache.mkdir(parents=True, exist_ok=True)
+        os.chown(cache, account.pw_uid, account.pw_gid)
+        workspace = Path(tempfile.mkdtemp(prefix='build-', dir=cache))
+        os.chown(workspace, account.pw_uid, account.pw_gid)
+        source = workspace / 'source'
+        prefix = ['runuser', '-u', 'ayu', '--', 'env', f'HOME={cache}',
+                  f'GOCACHE={cache}/go-build', f'GOMODCACHE={cache}/go-mod',
+                  'GOTOOLCHAIN=local', 'GOMAXPROCS=2', 'CGO_ENABLED=0']
+        try:
+            log(f'Fetching main into {source}')
+            subprocess.run(prefix + ['git', 'clone', '--depth=1', '--branch=main',
+                                    f'https://github.com/{REPOSITORY}.git', str(source)],
+                           check=True, timeout=120)
+            actual = subprocess.check_output(prefix + ['git', 'rev-parse', 'HEAD'],
+                                             cwd=source, text=True, timeout=15).strip()
+            if actual != sha:
+                raise MainChanged('Main changed while cloning; checking again next minute')
+            try:
+                for command in (['go', 'test', './...'], ['go', 'vet', './...'],
+                                ['python3', '-m', 'unittest', 'discover', '-s', 'deploy/phone', '-p', 'test_*.py', '-v'],
+                                ['go', 'build', '-trimpath', '-ldflags=-s -w -X main.buildRevision=' + sha,
+                                 '-o', str(workspace / 'server'), '.']):
+                    log('Running on phone: ' + ' '.join(command))
+                    subprocess.run(prefix + command, cwd=source, check=True, timeout=900)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                raise BuildRejected(f'Phone tests/build rejected {sha}: {exc}') from exc
+            binary = (workspace / 'server').read_bytes()
+            manifest = {'revision': sha, 'sha256': hashlib.sha256(binary).hexdigest(), 'size': len(binary)}
+            self.stage(sha, binary, manifest)
+            archive = self.releases / sha / 'source.tar.gz'
+            with archive.open('wb') as output:
+                subprocess.run(prefix + ['git', 'archive', '--format=tar.gz', 'HEAD'],
+                               cwd=source, stdout=output, check=True, timeout=30)
+        finally:
+            shutil.rmtree(workspace)
 
     def probe(self, url, sha, forecast=False):
         headers = {'Cache-Control': 'no-cache', 'Connection': 'close'}
@@ -350,18 +388,19 @@ class Manager:
         if sha == self.selected('current') or (failed.exists() and failed.read_text().strip() == sha):
             return
         try:
-            self.download(sha)
-        except HTTPError as exc:
-            if exc.code == 404:
-                log(f'Waiting for tested build of main {sha}')
-                return
+            self.build(sha)
+        except MainChanged as exc:
+            log(str(exc))
+            return
+        except BuildRejected:
+            atomic_text(failed, sha + '\n')
             raise
-        # Re-check after downloading so an obsolete build cannot overtake a newer push.
+        # Re-check after building so an obsolete build cannot overtake a newer push.
         latest = subprocess.check_output(
             ['git', 'ls-remote', 'https://github.com/' + REPOSITORY + '.git', 'refs/heads/main'],
             text=True, timeout=30).split()[0]
         if latest != sha:
-            log('Main changed during download; deferring to the next check')
+            log('Main changed during build; deferring to the next check')
             return
         try:
             self.promote(sha)
@@ -408,7 +447,7 @@ def main():
                           json.loads(Path(args.manifest).read_text()))
             manager.promote(args.revision)
         elif args.command == 'deploy':
-            manager.download(revision(args.revision or ''))
+            manager.build(revision(args.revision or ''))
             manager.promote(args.revision)
         elif args.command == 'rollback':
             manager.rollback(args.revision)
