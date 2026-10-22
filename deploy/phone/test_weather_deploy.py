@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from weather_deploy import Manager, atomic_text, verify_artifact
+from weather_deploy import BuildRejected, MainChanged, Manager, atomic_text, verify_artifact
 
 
 def artifact(sha):
@@ -157,6 +157,37 @@ class DeploymentTests(unittest.TestCase):
         self.manager.promote(sha)
         self.assertTrue((self.manager.releases / sha / 'success').exists())
         self.assertIsNone(self.manager.selected('previous'))
+
+    def test_failed_phone_tests_do_not_change_live_release_or_retry_forever(self):
+        old = self.stage('a')
+        self.manager.promote(old)
+        candidate = 'b' * 40
+        with patch('subprocess.check_output', return_value=candidate + '\trefs/heads/main\n'), \
+                patch.object(self.manager, 'build', side_effect=BuildRejected('test failure')) as build:
+            with self.assertRaises(BuildRejected):
+                self.manager.update()
+            self.manager.update()
+            self.assertEqual(build.call_count, 1)
+        self.assertEqual(self.manager.selected('current'), old)
+        self.assertIn(old, self.manager.started)
+
+    def test_new_push_during_phone_build_defers_promotion(self):
+        old = self.stage('a')
+        self.manager.promote(old)
+        candidate, newer = 'b' * 40, 'c' * 40
+        with patch('subprocess.check_output', side_effect=[candidate, newer]), \
+                patch.object(self.manager, 'build') as build, \
+                patch.object(self.manager, 'promote') as promote:
+            self.manager.update()
+            build.assert_called_once_with(candidate)
+            promote.assert_not_called()
+        self.assertEqual(self.manager.selected('current'), old)
+
+    def test_clone_of_newer_main_is_not_recorded_as_failed_build(self):
+        with patch('subprocess.check_output', return_value='b' * 40), \
+                patch.object(self.manager, 'build', side_effect=MainChanged('main moved')):
+            self.manager.update()
+        self.assertFalse((self.manager.base / 'failed-revision').exists())
 
 
 if __name__ == '__main__':

@@ -438,7 +438,7 @@ def main():
     with contextlib.ExitStack() as stack:
         # recover is also run by the proxy ExecStartPre during bootstrap while
         # its parent deployment already holds the lock. It only restores state.
-        if args.command != 'recover':
+        if args.command not in ('recover', 'status'):
             lock = stack.enter_context(open('/run/lock/weather-deploy.lock', 'a'))
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         manager = Manager()
