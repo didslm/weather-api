@@ -146,6 +146,18 @@ class DeploymentTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'immutable'):
             self.manager.stage(sha, binary, manifest)
 
+    def test_incomplete_bootstrap_is_verified_before_becoming_successful(self):
+        sha = self.stage('a')
+        self.manager.select('current', sha)
+        self.manager.fail_candidate = True
+        with self.assertRaises(RuntimeError):
+            self.manager.promote(sha)
+        self.assertFalse((self.manager.releases / sha / 'success').exists())
+        self.manager.fail_candidate = False
+        self.manager.promote(sha)
+        self.assertTrue((self.manager.releases / sha / 'success').exists())
+        self.assertIsNone(self.manager.selected('previous'))
+
 
 if __name__ == '__main__':
     unittest.main()

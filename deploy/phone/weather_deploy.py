@@ -241,6 +241,16 @@ class Manager:
         old = self.selected('current')
         old_previous = self.selected('previous')
         if sha == old:
+            if not (self.releases / sha / 'success').exists():
+                # An initial bootstrap may have been interrupted before its
+                # first successful proxy check. Finish it without inventing a
+                # previous release or skipping the verification gates.
+                self.unit('start', sha)
+                self.ready(sha)
+                self.reload_proxy()
+                self.check_promoted(sha)
+                atomic_text(self.releases / sha / 'success', str(time.time()))
+                (self.base / 'pending.json').unlink(missing_ok=True)
             log(f'Already serving {sha}')
             return
         self.unit('start', sha)

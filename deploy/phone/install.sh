@@ -6,7 +6,7 @@ phone_files=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 for dependency in python3 nginx git curl systemctl; do
     command -v "$dependency" >/dev/null || { echo "Missing $dependency" >&2; exit 1; }
 done
-install -d -m 755 /opt/weather-risk-api /opt/weather-risk-api/releases
+install -d -m 755 /usr/local/sbin /opt/weather-risk-api /opt/weather-risk-api/releases
 install -d -o ayu -g ayu -m 700 /var/lib/weather-risk-api
 install -m 755 "$phone_files/weather_deploy.py" /usr/local/sbin/weather-deploy
 install -m 644 "$phone_files/nginx.conf" /opt/weather-risk-api/nginx.conf
