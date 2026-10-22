@@ -1,0 +1,25 @@
+[Unit]
+Description=Weather API release %i
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+User=ayu
+Group=ayu
+WorkingDirectory=/opt/weather-risk-api/releases/%i
+EnvironmentFile=/opt/weather-risk-api/releases/%i/service.env
+ExecStart=/opt/weather-risk-api/releases/%i/server
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=40
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/weather-risk-api
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

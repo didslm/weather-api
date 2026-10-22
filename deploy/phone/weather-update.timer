@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Weather API main every minute
+
+[Timer]
+OnBootSec=90
+OnUnitInactiveSec=60
+AccuracySec=5
+Unit=weather-update.service
+
+[Install]
+WantedBy=timers.target

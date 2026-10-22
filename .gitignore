@@ -4,3 +4,5 @@ forecast_log.jsonl
 
 # Compiled binary (build artifact)
 /weather-risk-api
+/.cache/
+__pycache__/

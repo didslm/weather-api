@@ -1,0 +1,15 @@
+[Unit]
+Description=Check main for a tested Weather API release
+Wants=network-online.target
+After=network-online.target weather-proxy.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/weather-deploy update
+TimeoutStartSec=300
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/weather-risk-api /var/lib/weather-risk-api /run/lock

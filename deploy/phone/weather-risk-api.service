@@ -1,0 +1,23 @@
+[Unit]
+Description=Weather Risk API
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=ayu
+Group=ayu
+WorkingDirectory=/home/ayu/Projects/weather-risk-api
+ExecStart=/home/ayu/Projects/weather-risk-api/server
+Environment=PORT=8082
+Environment=VERIFICATION_LOG_PATH=/home/ayu/Projects/weather-risk-api/data/forecast_log.jsonl
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/ayu/Projects/weather-risk-api/data
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

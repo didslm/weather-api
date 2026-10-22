@@ -1,18 +1,25 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
 	"net/http"
 	"os"
+	"os/signal"
 	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
+
+// Set at build time so deployment checks can identify the process serving a request.
+var buildRevision = "development"
 
 // ── Spatial in-memory cache (1 km radius) ────────────────────────────────────
 
@@ -645,6 +652,12 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, `{"status":"ok"}`)
 }
 
+func handleVersion(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]string{"revision": buildRevision})
+}
+
 func writeJSONError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -653,6 +666,7 @@ func writeJSONError(w http.ResponseWriter, status int, message string) {
 
 func withRecovery(name string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Release", buildRevision)
 		start := time.Now()
 		defer func() {
 			if rec := recover(); rec != nil {
@@ -672,16 +686,32 @@ func main() {
 	http.HandleFunc("/forecast/simple", withRecovery("forecast_simple", handleSimpleForecast))
 	http.HandleFunc("/forecast/window", withRecovery("forecast_window", handleWindowForecast))
 	http.HandleFunc("/health", withRecovery("health", handleHealth))
+	http.HandleFunc("/version", withRecovery("version", handleVersion))
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
-	addr := ":" + port
+	addr := os.Getenv("LISTEN_HOST") + ":" + port
 	log.Printf("weather-risk-api listening on %s", addr)
 	log.Printf("Usage: GET /forecast?lat=41.33&lon=19.82")
 	log.Printf("Usage: GET /forecast/window?lat=41.33&lon=19.82&start_date=2026-04-01&days=10")
-	if err := http.ListenAndServe(addr, nil); err != nil {
+	server := &http.Server{Addr: addr, ReadHeaderTimeout: 10 * time.Second}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	drained := make(chan struct{})
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("graceful shutdown: %v", err)
+			_ = server.Close()
+		}
+		close(drained)
+	}()
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+	<-drained
 }
