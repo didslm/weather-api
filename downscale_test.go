@@ -221,3 +221,21 @@ func ptrs(vals []float64) []*float64 {
 	}
 	return out
 }
+
+func TestDownscaleTurnsFreezingRainToRainAtWarmLowerTarget(t *testing.T) {
+	s := &hourlySeries{
+		temperature2m: []float64{-1},
+		precipitation: []float64{2},
+		rain:          []float64{2},
+		snowfall:      []float64{0},
+		precipType:    []int{3},
+		temp850:       []float64{math.NaN()},
+		temp700:       []float64{math.NaN()},
+		height850:     []float64{1500},
+		height700:     []float64{3000},
+	}
+	downscaleSeries(s, 2500, 1500) // -1000 m ⇒ +6.5 °C ⇒ 5.5 °C
+	if s.precipType[0] != 1 || s.rain[0] != 2 {
+		t.Fatalf("expected plain rain at 5.5 °C, got type=%d rain=%.1f", s.precipType[0], s.rain[0])
+	}
+}

@@ -37,6 +37,14 @@ type hourlySeries struct {
 	windDir850       []float64
 	windDir700       []float64
 	windDir500       []float64
+
+	// Altitude focus (altitude.go). levels is the full vertical profile;
+	// freezingLevel is the model's 0 °C level diagnostic (NaN where missing).
+	// ridgeWind and altitude are set only when a target elevation was applied.
+	levels        []levelSeries
+	freezingLevel []float64
+	ridgeWind     []float64
+	altitude      *float64
 }
 
 type spreadSeries struct {
@@ -104,6 +112,14 @@ func BuildRiskForecast(
 	var elevation *ElevationAdjustment
 	if targetElevation != nil && ecmwfResp != nil {
 		elevation = downscaleSeries(ecmwf, ecmwfResp.Elevation, *targetElevation)
+		if elevation == nil {
+			elevation = &ElevationAdjustment{
+				TargetM:   round1(*targetElevation),
+				ModelM:    round1(ecmwfResp.Elevation),
+				LapseNote: "none (target within 20 m of terrain)",
+			}
+		}
+		applyAltitudeExposure(ecmwf, *targetElevation, elevation)
 	}
 
 	brief := buildGuideBrief(ecmwf, conf)
@@ -130,7 +146,7 @@ func BuildRiskForecast(
 func buildGuideBrief(s *hourlySeries, conf confidence) GuideBrief {
 	horizon := min(24, len(s.time))
 
-	maxRidgeWind := maxSlice(s.wind700[:horizon])
+	maxRidgeWind := maxSlice(s.ridge()[:horizon])
 	maxGust := maxSlice(s.windGusts10m[:horizon])
 	minVis := minSlice(s.visibility[:horizon])
 	maxCape := maxSlice(s.cape[:horizon])
@@ -252,7 +268,7 @@ func buildDailySummaries(s *hourlySeries, dailyConfidence map[string]ConfidenceL
 		}
 		precip := pickFloats(s.precipitation, indices)
 		snow := pickFloats(s.snowfall, indices)
-		ridge := pickFloats(s.wind700, indices)
+		ridge := pickFloats(s.ridge(), indices)
 		vis := pickFloats(s.visibility, indices)
 		cape := pickFloats(s.cape, indices)
 		ptypes := pickInts(s.precipType, indices)
@@ -271,7 +287,7 @@ func buildDailySummaries(s *hourlySeries, dailyConfidence map[string]ConfidenceL
 		precipLevel := precipRiskLevel(totalPrecip, maxPrecipRate)
 		visLevel := visibilityRiskLevel(minVis)
 		thunderLevel := thunderRiskLevel(maxCape)
-		freezeLevel := freezingLevelRisk(freezingFlags, fd)
+		freezeLevel := freezingLevelRisk(freezingFlags, fd, s.altitude)
 		thermalLevel := thermalRiskLevel(minChill, minSlice(temps))
 
 		riskLevels := []struct {
@@ -326,6 +342,7 @@ func buildDailySummaries(s *hourlySeries, dailyConfidence map[string]ConfidenceL
 			TempMax:          maxSlice(temps),
 			WindMax:          maxSlice(winds),
 			GustMax:          maxSlice(gusts),
+			RidgeWindMax:     maxRidge,
 			WindDirection:    windDirDaily,
 			PrecipSum:        sumSlice(precip),
 			SnowSum:          sumSlice(snow),
@@ -465,12 +482,25 @@ func thunderRiskLevel(maxCape float64) RiskLevel {
 }
 
 func freezingRiskLevel(freezingFlags bool, s *hourlySeries, horizon int) RiskLevel {
-	return freezingLevelRisk(freezingFlags, calcFreezingData(s, horizon))
+	return freezingLevelRisk(freezingFlags, calcFreezingData(s, horizon), s.altitude)
 }
 
-func freezingLevelRisk(freezingFlags bool, fd freezingData) RiskLevel {
+// freezingLevelRisk judges the freezing level against the hike's altitude when
+// one is known (freezing at or just above the hiker ⇒ ice underfoot), else
+// against the legacy fixed 2200 m.
+func freezingLevelRisk(freezingFlags bool, fd freezingData, altitude *float64) RiskLevel {
 	if freezingFlags {
 		return RiskHigh
+	}
+	if altitude != nil {
+		switch {
+		case fd.minLevel != nil && float64(*fd.minLevel) <= *altitude+freezingMarginM:
+			return RiskModerate
+		case fd.minLevel == nil && fd.below1500:
+			return RiskModerate
+		default:
+			return RiskLow
+		}
 	}
 	switch {
 	case fd.below1500:
@@ -645,7 +675,7 @@ func rainSignal(total, maxRate float64) RainSignal {
 func riskDrivers(s *hourlySeries, horizon int) []RiskDriver {
 	var wind, precip, vis, thunder, freezing int
 	for i := 0; i < horizon; i++ {
-		if s.wind700[i] >= 45 || s.windGusts10m[i] >= 50 {
+		if s.ridge()[i] >= 45 || s.windGusts10m[i] >= 50 {
 			wind++
 		}
 		if s.precipitation[i] >= 2 {
@@ -688,7 +718,7 @@ func buildKeyRisks(
 	windLevel, precipLevel, visLevel, thunderLevel, freezeLevel, thermalLevel RiskLevel,
 	dominant RiskCategory,
 ) []RiskKey {
-	maxRidge := maxSlice(s.wind700[:horizon])
+	maxRidge := maxSlice(s.ridge()[:horizon])
 	maxGust := maxSlice(s.windGusts10m[:horizon])
 	pw := calcPrecipWindow(s, horizon)
 	fd := calcFreezingData(s, horizon)
@@ -762,9 +792,9 @@ func timingNotes(s *hourlySeries, horizon int) []string {
 	}
 	early := min(6, horizon)
 	if early >= 3 {
-		earlyWind := avgSlice(s.wind700[:early])
+		earlyWind := avgSlice(s.ridge()[:early])
 		lateStart := max(0, horizon-early)
-		lateWind := avgSlice(s.wind700[lateStart:horizon])
+		lateWind := avgSlice(s.ridge()[lateStart:horizon])
 		if lateWind-earlyWind >= 10 {
 			notes = append(notes, "Ridge winds strengthen later")
 		}
@@ -869,7 +899,7 @@ func isSnowBlock(types []int, snowSum float64) bool {
 
 func hasWindLoading(s *hourlySeries, horizon int) bool {
 	for i := 0; i < horizon; i++ {
-		if s.snowfall[i] >= 1 && s.wind700[i] >= 40 {
+		if s.snowfall[i] >= 1 && s.ridge()[i] >= 40 {
 			return true
 		}
 	}
@@ -947,7 +977,7 @@ func freezingDataForIndices(s *hourlySeries, indices []int) freezingData {
 	var levels []float64
 	below, above := len(indices) > 0, len(indices) > 0
 	for _, i := range indices {
-		if fl := freezingLevelAt(s.temp850[i], s.temp700[i], s.temp500[i], s.height850[i], s.height700[i], s.height500[i]); fl != nil {
+		if fl := s.freezingLevelFor(i); fl != nil {
 			levels = append(levels, *fl)
 		}
 		below = below && finite(s.temp850[i]) && s.temp850[i] <= 0
@@ -1114,7 +1144,36 @@ func toHourlySeries(r *OpenMeteoResponse) *hourlySeries {
 		return nil
 	}
 
+	type rawLevel struct {
+		hPa         int
+		t, z, w, rh []*float64
+	}
+	rawLevels := []rawLevel{
+		{925, h.Temperature925hPa, h.GeopotentialHeight925hPa, h.WindSpeed925hPa, h.RelativeHumidity925hPa},
+		{900, h.Temperature900hPa, h.GeopotentialHeight900hPa, h.WindSpeed900hPa, h.RelativeHumidity900hPa},
+		{850, h.Temperature850hPa, h.GeopotentialHeight850hPa, h.WindSpeed850hPa, h.RelativeHumidity850hPa},
+		{800, h.Temperature800hPa, h.GeopotentialHeight800hPa, h.WindSpeed800hPa, h.RelativeHumidity800hPa},
+		{700, h.Temperature700hPa, h.GeopotentialHeight700hPa, h.WindSpeed700hPa, h.RelativeHumidity700hPa},
+		{600, h.Temperature600hPa, h.GeopotentialHeight600hPa, h.WindSpeed600hPa, h.RelativeHumidity600hPa},
+		{500, h.Temperature500hPa, h.GeopotentialHeight500hPa, h.WindSpeed500hPa, h.RelativeHumidity500hPa},
+	}
+	var levels []levelSeries
+	for _, l := range rawLevels {
+		if l.z == nil {
+			continue
+		}
+		levels = append(levels, levelSeries{
+			hPa:    l.hPa,
+			temp:   derefFloats(l.t, size, math.NaN()),
+			height: derefFloats(l.z, size, math.NaN()),
+			wind:   derefFloats(l.w, size, math.NaN()),
+			rh:     derefFloats(l.rh, size, math.NaN()),
+		})
+	}
+
 	return &hourlySeries{
+		levels:           levels,
+		freezingLevel:    derefFloats(h.FreezingLevelHeight, size, math.NaN()),
 		time:             h.Time[:size],
 		temperature2m:    derefFloats(h.Temperature2m, size, 0),
 		windSpeed10m:     derefFloats(h.WindSpeed10m, size, 0),

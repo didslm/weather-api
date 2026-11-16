@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -18,7 +19,23 @@ var forecastHTTPClient = &http.Client{Timeout: 8 * time.Second}
 // Surface fields from /v1/forecast (high-res, altitude-corrected).
 var surfaceFields = "temperature_2m,wind_speed_10m,wind_gusts_10m,wind_direction_10m," +
 	"precipitation,rain,snowfall,visibility,cape," +
-	"cloud_cover_low,cloud_cover_mid,cloud_cover_high"
+	"cloud_cover_low,cloud_cover_mid,cloud_cover_high," +
+	"freezing_level_height," + profileFields()
+
+// profileLevels are the pressure levels fetched for the vertical profile that
+// altitude focus interpolates (≈ 770 m … 5600 m), which brackets every Balkan
+// hiking altitude with a level every ~500 m where it matters.
+var profileLevels = []int{925, 900, 850, 800, 700, 600, 500}
+
+func profileFields() string {
+	parts := make([]string, 0, len(profileLevels)*4)
+	for _, l := range profileLevels {
+		for _, v := range []string{"temperature", "geopotential_height", "wind_speed", "relative_humidity"} {
+			parts = append(parts, fmt.Sprintf("%s_%dhPa", v, l))
+		}
+	}
+	return strings.Join(parts, ",")
+}
 
 // Upper-air + special fields from /v1/ecmwf (unique to ECMWF).
 var ecmwfFields = "precipitation_type,convective_inhibition," +
@@ -99,9 +116,11 @@ func FetchAll(lat, lon float64, forecastDays int) (merged *OpenMeteoResponse, sp
 }
 
 // mergeUpperAir copies ECMWF upper-air and special fields into the surface
-// response, aligning by timestamp. If ECMWF has fewer time steps (e.g. for
-// longer forecasts), missing hours get nil values which derefFloats handles
-// with defaults.
+// response, aligning by timestamp. The surface response now carries its own
+// vertical profile, so for each hour a value it already has is kept and ECMWF
+// only fills the gaps (and supplies the fields unique to it: precipitation type,
+// CIN, wind directions). Hours neither source covers stay nil, which derefFloats
+// handles with defaults.
 func mergeUpperAir(surface, ecmwf *OpenMeteoResponse) {
 	if surface.Hourly == nil || ecmwf.Hourly == nil {
 		return
@@ -142,7 +161,12 @@ func mergeUpperAir(surface, ecmwf *OpenMeteoResponse) {
 			continue
 		}
 		aligned := make([]*float64, n)
+		existing := *f.dest
 		for i, t := range s.Time {
+			if i < len(existing) && existing[i] != nil {
+				aligned[i] = existing[i]
+				continue
+			}
 			if j, ok := eIdx[t]; ok && j < len(f.src) {
 				aligned[i] = f.src[j]
 			}

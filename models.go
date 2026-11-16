@@ -182,6 +182,7 @@ type DailyRiskSummary struct {
 	TempMax          float64         `json:"temp_max"`
 	WindMax          float64         `json:"wind_max"`
 	GustMax          float64         `json:"gust_max"`
+	RidgeWindMax     float64         `json:"ridge_wind_max"`
 	WindDirection    int             `json:"wind_direction"`
 	PrecipSum        float64         `json:"precip_sum"`
 	SnowSum          float64         `json:"snow_sum"`
@@ -201,13 +202,18 @@ type RiskForecast struct {
 	Days      []DailyRiskSummary   `json:"days"`
 }
 
-// ElevationAdjustment records a terrain downscaling that was applied: the forecast
-// was corrected from the model gridpoint elevation to a caller-supplied target
-// elevation. Present only when downscaling actually ran.
+// ElevationAdjustment records the altitude focus that was applied: the forecast
+// was corrected from the terrain elevation Open-Meteo reports for the point to a
+// caller-supplied target elevation. Present whenever a target elevation was given.
 type ElevationAdjustment struct {
 	TargetM   float64 `json:"target_m"`
 	ModelM    float64 `json:"model_m"`
 	LapseNote string  `json:"lapse_note"`
+	// Altitude focus (see altitude.go). FreeAirWindMaxKmh and InCloudHours cover
+	// the next 24 h at the target altitude.
+	FreeAirWindMaxKmh *float64 `json:"free_air_wind_max_kmh,omitempty"`
+	InCloudHours      *int     `json:"in_cloud_hours,omitempty"`
+	WindNote          string   `json:"wind_note,omitempty"`
 }
 
 // ── Open-Meteo API response models ───────────────────────────────────────────
@@ -248,4 +254,24 @@ type OpenMeteoHourly struct {
 	WindDirection850hPa      []*float64 `json:"wind_direction_850hPa"`
 	WindDirection700hPa      []*float64 `json:"wind_direction_700hPa"`
 	WindDirection500hPa      []*float64 `json:"wind_direction_500hPa"`
+	Temperature925hPa        []*float64 `json:"temperature_925hPa"`
+	GeopotentialHeight925hPa []*float64 `json:"geopotential_height_925hPa"`
+	WindSpeed925hPa          []*float64 `json:"wind_speed_925hPa"`
+	Temperature900hPa        []*float64 `json:"temperature_900hPa"`
+	GeopotentialHeight900hPa []*float64 `json:"geopotential_height_900hPa"`
+	WindSpeed900hPa          []*float64 `json:"wind_speed_900hPa"`
+	Temperature800hPa        []*float64 `json:"temperature_800hPa"`
+	GeopotentialHeight800hPa []*float64 `json:"geopotential_height_800hPa"`
+	WindSpeed800hPa          []*float64 `json:"wind_speed_800hPa"`
+	Temperature600hPa        []*float64 `json:"temperature_600hPa"`
+	GeopotentialHeight600hPa []*float64 `json:"geopotential_height_600hPa"`
+	WindSpeed600hPa          []*float64 `json:"wind_speed_600hPa"`
+	RelativeHumidity925hPa   []*float64 `json:"relative_humidity_925hPa"`
+	RelativeHumidity900hPa   []*float64 `json:"relative_humidity_900hPa"`
+	RelativeHumidity850hPa   []*float64 `json:"relative_humidity_850hPa"`
+	RelativeHumidity800hPa   []*float64 `json:"relative_humidity_800hPa"`
+	RelativeHumidity700hPa   []*float64 `json:"relative_humidity_700hPa"`
+	RelativeHumidity600hPa   []*float64 `json:"relative_humidity_600hPa"`
+	RelativeHumidity500hPa   []*float64 `json:"relative_humidity_500hPa"`
+	FreezingLevelHeight      []*float64 `json:"freezing_level_height"`
 }

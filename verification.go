@@ -45,6 +45,10 @@ type forecastLogRecord struct {
 	SnowCm         float64  `json:"snow_cm"`
 	VisibilityMinM float64  `json:"visibility_min_m"`
 	Sources        []string `json:"sources"`
+	// ElevationM is the target altitude the forecast was focused on, absent when
+	// none was requested — grading must score those two populations separately.
+	ElevationM      *float64 `json:"elevation_m,omitempty"`
+	RidgeWindMaxKmh float64  `json:"ridge_wind_max_kmh"`
 }
 
 // verificationLogger appends forecast records as JSONL. The file handle is opened
@@ -137,6 +141,12 @@ func buildForecastLogRecords(lat, lon float64, f *RiskForecast, issuedAt time.Ti
 	issuedAt = issuedAt.UTC()
 	issueDate := toDateOnly(issuedAt)
 
+	var elevationM *float64
+	if f.Elevation != nil {
+		v := f.Elevation.TargetM
+		elevationM = &v
+	}
+
 	out := make([]forecastLogRecord, 0, len(f.Days))
 	for _, d := range f.Days {
 		target, err := time.Parse("2006-01-02", d.Date)
@@ -145,22 +155,24 @@ func buildForecastLogRecords(lat, lon float64, f *RiskForecast, issuedAt time.Ti
 		}
 		leadDays := int(toDateOnly(target).Sub(issueDate).Hours() / 24)
 		out = append(out, forecastLogRecord{
-			IssuedAt:       issuedAt.Format(time.RFC3339),
-			Lat:            lat,
-			Lon:            lon,
-			TargetDate:     d.Date,
-			LeadDays:       leadDays,
-			RiskLevel:      d.RiskLevel.String(),
-			DominantRisk:   string(d.DominantRisk),
-			Confidence:     string(d.Confidence),
-			TempMinC:       round1(d.TempMin),
-			TempMaxC:       round1(d.TempMax),
-			WindMaxKmh:     round1(d.WindMax),
-			GustMaxKmh:     round1(d.GustMax),
-			PrecipMm:       round1(d.PrecipSum),
-			SnowCm:         round1(d.SnowSum),
-			VisibilityMinM: round1(d.VisibilityMin),
-			Sources:        f.Sources,
+			IssuedAt:        issuedAt.Format(time.RFC3339),
+			Lat:             lat,
+			Lon:             lon,
+			TargetDate:      d.Date,
+			LeadDays:        leadDays,
+			RiskLevel:       d.RiskLevel.String(),
+			DominantRisk:    string(d.DominantRisk),
+			Confidence:      string(d.Confidence),
+			TempMinC:        round1(d.TempMin),
+			TempMaxC:        round1(d.TempMax),
+			WindMaxKmh:      round1(d.WindMax),
+			GustMaxKmh:      round1(d.GustMax),
+			PrecipMm:        round1(d.PrecipSum),
+			SnowCm:          round1(d.SnowSum),
+			VisibilityMinM:  round1(d.VisibilityMin),
+			Sources:         f.Sources,
+			ElevationM:      elevationM,
+			RidgeWindMaxKmh: round1(d.RidgeWindMax),
 		})
 	}
 	return out

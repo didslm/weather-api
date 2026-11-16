@@ -33,7 +33,14 @@ Returns a comprehensive risk report, including:
 *   **Snapshot:** A 24-hour look at max/min values (Wind, Temp, Cloud cover, etc.).
 *   **Daily Summaries:** 10-day forecast with segmented data (Morning, Afternoon, Evening, Night).
 
-**Terrain downscaling (optional):** Pass `elevation` (or `alt`) in metres to correct the forecast from the coarse model gridpoint to the actual trailhead/summit elevation — e.g. `?lat=42.6&lon=20.1&elevation=2500`. Surface temperature is adjusted with a lapse rate derived from the model's own 850/700 hPa profile (falling back to the standard 6.5 °C/km), wind chill recomputes from the corrected temperature, and precipitation phase is reclassified (rain ⇄ snow) so a valley "rain" forecast surfaces as summit snow/ice. The applied correction is echoed in an `elevation` object on the response. Wind, gusts, and precip amount are **not** yet elevation-corrected. Accepted on `/forecast`, `/forecast/simple`, and the live window of `/forecast/window`.
+**Terrain downscaling (optional):** Pass `elevation` (or `alt`) in metres to correct the forecast from the coarse model gridpoint to the actual trailhead/summit elevation — e.g. `?lat=42.6&lon=20.1&elevation=2500`. **For hiking events, always pass the elevation of the highest / most exposed point of the route** — without it the forecast describes the model's smoothed terrain, not the mountain. With an elevation, the model's vertical profile (925–500 hPa) is interpolated to that altitude:
+
+*   **Temperature** follows the model's own temperature profile between the terrain and the target (so valley inversions are respected), falling back to an 850/700 hPa or standard 6.5 °C/km lapse where the profile doesn't reach. Precipitation phase is reclassified at the corrected temperature (rain ⇄ snow; freezing rain becomes rain at a clearly above-freezing lower target).
+*   **Wind**: the free-air wind at the target altitude replaces 700 hPa (~3000 m) as the ridge wind driving the wind risk (`ridge_wind_max` per day), and floors the surface wind (×0.8) and gusts (×1.4 of that) for exposed terrain. Wind chill uses the result.
+*   **Cloud**: relative humidity ≥ 97 % at the altitude means the route is in cloud; visibility is capped at 300 m for those hours.
+*   **Freezing level** is judged against the altitude (at or within 200 m above it ⇒ MODERATE) instead of a fixed 2200 m.
+
+The `elevation` object on the response echoes what was applied (`target_m`, `model_m`, `lapse_note`, `free_air_wind_max_kmh`, `in_cloud_hours`, `wind_note`). The exposure factors are untuned defaults pending verification data; precip amount is **not** elevation-corrected. Accepted on `/forecast`, `/forecast/simple`, and the live window of `/forecast/window`.
 
 ### `GET /forecast/simple`
 A condensed JSON response focusing on "SimpleDay" objects, ideal for mobile dashboards or quick status checks.

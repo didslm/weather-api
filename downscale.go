@@ -18,9 +18,9 @@ import (
 // precipitation phase at the corrected temperature. Wind chill and all risk
 // levels recompute downstream automatically because they read these series.
 //
-// Not corrected here: wind, gusts, precip amount, visibility, CAPE, cloud. Those
-// need orographic/exposure modelling rather than a clean lapse and are left for a
-// later pass.
+// Wind and in-cloud visibility at the target altitude are handled separately in
+// altitude.go. Still not corrected: precip amount (orographic enhancement) and
+// CAPE.
 
 const (
 	standardLapseCPerKm = 6.5 // ICAO standard atmosphere environmental lapse rate
@@ -45,9 +45,15 @@ func downscaleSeries(s *hourlySeries, gridElev, targetElev float64) *ElevationAd
 	}
 	deltaKm := deltaM / 1000.0
 
-	localHours := 0
+	localHours, profileHours := 0, 0
 	n := len(s.temperature2m)
 	for i := 0; i < n; i++ {
+		if t, ok := profileTempAt(s, i, gridElev, targetElev); ok {
+			profileHours++
+			s.temperature2m[i] = t
+			reclassifyPhase(s, i)
+			continue
+		}
 		lapse, local := localLapseCPerKm(s, i)
 		if local {
 			localHours++
@@ -61,11 +67,51 @@ func downscaleSeries(s *hourlySeries, gridElev, targetElev float64) *ElevationAd
 	if localHours > 0 {
 		note = fmt.Sprintf("model 850/700 hPa lapse (%d/%d hrs), else standard %.1f°C/km", localHours, n, standardLapseCPerKm)
 	}
+	if profileHours > 0 {
+		note = fmt.Sprintf("model temperature profile (%d/%d hrs), else %s", profileHours, n, note)
+	}
 	return &ElevationAdjustment{
 		TargetM:   round1(targetElev),
 		ModelM:    round1(gridElev),
 		LapseNote: note,
 	}
+}
+
+// profileTempAt returns the temperature at targetElev for hour i using the model's
+// vertical temperature profile, or false when the profile does not bracket both
+// elevations (the caller then falls back to a single lapse rate).
+//
+// The model's free-air temperature change between the two elevations is applied
+// to the surface temperature, which — unlike one 850→700 hPa lapse rate — follows
+// the real layering, including the valley inversions that make a fixed lapse
+// badly too cold aloft on calm winter mornings. Going up, the surface's own
+// departure from the free air (night-time cooling, daytime heating) is faded out
+// with height, since a summit well above the terrain sits in the free air; going
+// down it is kept, since valleys hold the strongest surface signal.
+func profileTempAt(s *hourlySeries, i int, gridElev, targetElev float64) (float64, bool) {
+	tTarget, ok := s.profileAt(i, targetElev, profTemp)
+	if !ok {
+		return 0, false
+	}
+	tGrid, ok := s.profileAt(i, gridElev, profTemp)
+	if !ok {
+		return 0, false
+	}
+	deltaM := targetElev - gridElev
+	keep := 1.0
+	if deltaM > 0 {
+		keep = math.Max(0, 1-deltaM/surfaceAnomalyDecayM)
+	}
+	corrected := tTarget + keep*(s.temperature2m[i]-tGrid)
+
+	// Guard against a broken profile: no real layer warms or cools faster than
+	// dry-adiabatic plus a generous inversion allowance.
+	limit := maxLapseCPerKm*math.Abs(deltaM)/1000 + 5
+	change := corrected - s.temperature2m[i]
+	if math.Abs(change) > limit {
+		return 0, false
+	}
+	return corrected, true
 }
 
 // localLapseCPerKm derives the environmental lapse rate for hour i from the model's
@@ -86,17 +132,24 @@ func localLapseCPerKm(s *hourlySeries, i int) (float64, bool) {
 
 // reclassifyPhase shifts precipitation between rain and snow for hour i based on
 // the (already corrected) surface temperature. Freezing rain / drizzle / ice
-// pellets are left untouched — they are frozen hazards regardless of the shift.
+// pellets stay frozen hazards when the correction goes colder, but freezing rain
+// and drizzle need a sub-zero surface to glaze: at a clearly above-freezing
+// corrected temperature (a lower, warmer target) they fall as plain rain.
 func reclassifyPhase(s *hourlySeries, i int) {
 	precip := s.precipitation[i]
 	if precip <= 0 {
 		return
 	}
 	t := s.precipType[i]
+	temp := s.temperature2m[i]
+	if isFreezingPrecip(t) && temp >= rainFloorC {
+		s.rain[i] = math.Max(s.rain[i], precip)
+		s.precipType[i] = 1 // rain
+		return
+	}
 	if isFreezingPrecip(t) || t == 4 { // freezing rain/drizzle (3/6) or ice pellets (4)
 		return
 	}
-	temp := s.temperature2m[i]
 	switch {
 	case temp <= snowCeilingC && (isRainType(t) || t == 0):
 		s.snowfall[i] = math.Max(s.snowfall[i], precip*mmToSnowCm)
