@@ -6,3 +6,6 @@ forecast_log.jsonl
 /weather-risk-api
 /.cache/
 __pycache__/
+
+# macOS Finder metadata
+.DS_Store

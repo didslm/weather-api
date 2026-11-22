@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Phone Services
+Comment=Manage route planning, weather, AI, and the test website
+Exec=/usr/sbin/firefox-esr --new-window http://127.0.0.1:8084
+Icon=/home/ayu/.local/share/icons/hicolor/scalable/apps/weather-dashboard.svg
+Terminal=false
+Categories=Network;Utility;
+StartupNotify=false
+X-Purism-FormFactor=Mobile;

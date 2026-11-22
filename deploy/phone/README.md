@@ -2,6 +2,30 @@
 
 Public API: **https://weather-api.shtegtimi.com**.
 
+The **Phone Services** launcher opens **http://127.0.0.1:8084** on the phone.
+It shows memory, CPU load, storage, battery, and six service groups: route
+planner, weather API, Qwen AI, Shtegtimi test site, public API tunnel, and AI
+tunnel. The public API tunnel is shared by route planning and weather.
+
+Application panels show health, component status, and logs with start/stop/restart
+controls. Route and weather panels also show live/previous commits, deployment
+activity, update checks, pause/resume, and rollback. Rollback pauses automatic
+promotion. Stopping an API stops its update timer and workers; starting it brings
+back its proxy and timer. Existing enabled services return after a phone reboot.
+The panel rejects stop/restart during an active deployment and restores the timer
+if a deployment raced with a stop request.
+
+The dashboard listens on loopback only. Reads require a local Host header;
+actions require the matching local Origin, a per-process control token, a small
+JSON body, and an allowlisted service/action. Actions are serialized, run in the
+background, and report success or failure. No arbitrary shell or OS-service
+control is exposed. Logs stay on the phone. The local UI needs no remote assets.
+
+Dashboard source: `weather_dashboard.py`, `phone_services.html`, and the matching
+service/desktop/icon files here. Install these as infrastructure; normal API
+pushes do not replace the root-owned dashboard. Test it with
+`python3 -m unittest discover -s deploy/phone -p 'test_weather_dashboard.py' -v`.
+
 A push to `main` from **any machine** is enough. The phone checks GitHub every
 minute, pulls main into a fresh local workspace, runs the tests, builds a native
 ARM64 binary, and promotes it after verification. No GitHub Actions, release

@@ -1,0 +1,26 @@
+[Unit]
+Description=Loopback-only phone service status dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Environment=PHONE_SERVICES_PAGE=/usr/local/share/phone-services/index.html
+ExecStart=/usr/bin/python3 /usr/local/sbin/weather-dashboard.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/weather-risk-api -/opt/trail-router /run/lock
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=true
+MemoryMax=192M
+TasksMax=64
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
